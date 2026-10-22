@@ -12,20 +12,16 @@ import {
   type Issue,
   type Workspace,
 } from "@cfs/codegen";
-import { COLOURS, ENGINE, TIME, TT, defineBlocks, maxInstances, toolbox } from "./blocks";
+import { COLOURS, ENGINE, defineBlocks, maxInstances, toolbox } from "./blocks";
 import { loadWorkspace, parseWorkspaceFile, readWorkspace } from "./convert";
+import { diffLines, explain, lineRegions, type Hunk } from "./diff";
 import { renderCode } from "./highlight";
+import { infoForBlockType, infoForKey, placedKeys, type BlockInfo } from "./info";
 import "./style.css";
 
 const STORAGE_KEY = "cfs.blockly.v1";
-/** Files the user builds come first; the machinery follows alphabetically. */
-const PRIMARY = ["src/search.rs", "src/eval.rs", "src/params.rs", "src/main.rs"];
-type Tab = string;
-
-function tabOrder(paths: string[]): Tab[] {
-  const rust = paths.filter((p) => p.startsWith("src/") && !PRIMARY.includes(p)).sort();
-  return [...PRIMARY.filter((p) => paths.includes(p)), ...rust, "Cargo.toml"];
-}
+/** The files that are "your engine"; the rest is machinery. */
+const ENGINE_FILES = new Set(["src/search.rs", "src/eval.rs", "src/params.rs"]);
 
 // Blockly setup -------------------------------------------------------------
 
@@ -63,6 +59,17 @@ const bw = Blockly.inject("workspace", {
 // "Inline inputs" only rearranges a block's fields and would confuse beginners.
 Blockly.ContextMenuRegistry.registry.unregister("blockInline");
 
+Blockly.ContextMenuRegistry.registry.register({
+  id: "cfsExplain",
+  scopeType: Blockly.ContextMenuRegistry.ScopeType.BLOCK,
+  displayText: "Explain this block",
+  weight: -10,
+  preconditionFn: (scope) => (scope.block && infoForBlockType(scope.block.type) ? "enabled" : "hidden"),
+  callback: (scope) => {
+    if (scope.block) explainBlock(scope.block);
+  },
+});
+
 // Blocks not connected to an Engine block are greyed out and ignored.
 bw.addChangeListener(Blockly.Events.disableOrphans);
 
@@ -71,118 +78,360 @@ bw.addChangeListener(Blockly.Events.disableOrphans);
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const codeEl = $<HTMLPreElement>("code");
 const pathEl = $("code-path");
-const tabsEl = $("tabs");
+const treeEl = $("tree");
+const tourEl = $("tour");
 const issuesEl = $<HTMLUListElement>("issues");
 const exportBtn = $<HTMLButtonElement>("export");
 const fileInput = $<HTMLInputElement>("file");
 const toastEl = $("toast");
 
-let activeTab: Tab = "src/search.rs";
 let files: GeneratedFile[] = [];
+let activeFile = "src/search.rs";
 let current: Workspace | null = null;
 let focusRegion: string | null = null;
+const collapsed = new Set<string>();
 
-let tabs: Tab[] = [];
-
-/** Rebuilds the tab bar when the set of generated files changes. */
-function renderTabs(): void {
-  const next = tabOrder(files.map((f) => f.path));
-  if (next.join() === tabs.join()) return;
-  tabs = next;
-  tabsEl.replaceChildren(
-    ...tabs.map((tab) => {
-      const b = document.createElement("button");
-      b.className = "tab";
-      b.type = "button";
-      b.role = "tab";
-      b.textContent = tab.replace("src/", "");
-      b.dataset.tab = tab;
-      b.addEventListener("click", () => showTab(tab));
-      return b;
-    }),
-  );
-  if (!tabs.includes(activeTab)) activeTab = "src/search.rs";
-}
+const lines = (path: string) => files.find((f) => f.path === path)?.contents.replace(/\n$/, "").split("\n") ?? [];
 
 function toast(message: string): void {
   toastEl.textContent = message;
   toastEl.classList.add("show");
-  window.setTimeout(() => toastEl.classList.remove("show"), 2200);
+  window.setTimeout(() => toastEl.classList.remove("show"), 2600);
 }
 
-// Preview -------------------------------------------------------------------
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
 
-function showTab(tab: Tab, scroll = false): void {
-  activeTab = tab;
-  for (const b of tabsEl.querySelectorAll<HTMLButtonElement>(".tab")) {
-    b.setAttribute("aria-selected", String(b.dataset.tab === tab));
+// File tree -----------------------------------------------------------------
+
+interface Dir {
+  dirs: Map<string, Dir>;
+  files: string[];
+}
+
+function buildTree(paths: string[]): Dir {
+  const root: Dir = { dirs: new Map(), files: [] };
+  for (const path of paths) {
+    const parts = path.split("/");
+    let dir = root;
+    for (const part of parts.slice(0, -1)) {
+      if (!dir.dirs.has(part)) dir.dirs.set(part, { dirs: new Map(), files: [] });
+      dir = dir.dirs.get(part)!;
+    }
+    dir.files.push(path);
   }
-  pathEl.textContent = tab;
-  const file = files.find((f) => f.path === tab);
-  codeEl.innerHTML = file ? renderCode(file.contents) : "";
-  applyFocus(scroll);
+  return root;
 }
 
-function applyFocus(scroll: boolean): void {
-  let first: HTMLElement | null = null;
-  for (const ln of codeEl.querySelectorAll<HTMLElement>(".ln")) {
-    const on = focusRegion !== null && ln.dataset.region === focusRegion;
-    ln.classList.toggle("focus", on);
-    if (on && !first) first = ln;
+/** Counts of tour changes per file, shown as badges in the tree. */
+let changeCounts = new Map<string, number>();
+
+function renderTree(): void {
+  const crate = current ? toCrateName(current.engine.name) : "engine";
+  const list = el("ul", "tree-root");
+  const header = el("li", "tree-dir open");
+  header.append(el("span", "tree-label", `${crate}/`));
+  list.append(header);
+
+  const renderDir = (dir: Dir, prefix: string, depth: number, into: HTMLElement) => {
+    const ul = el("ul");
+    const byName = (a: string, b: string) => a.localeCompare(b, "en", { sensitivity: "base" });
+    for (const name of [...dir.dirs.keys()].sort(byName)) {
+      const key = `${prefix}${name}/`;
+      const li = el("li", collapsed.has(key) ? "tree-dir" : "tree-dir open");
+      const label = el("button", "tree-label", `${name}/`);
+      label.type = "button";
+      label.style.paddingLeft = `${depth * 14 + 8}px`;
+      label.addEventListener("click", () => {
+        if (collapsed.has(key)) collapsed.delete(key);
+        else collapsed.add(key);
+        renderTree();
+      });
+      li.append(label);
+      if (!collapsed.has(key)) renderDir(dir.dirs.get(name)!, key, depth + 1, li);
+      ul.append(li);
+    }
+    for (const path of [...dir.files].sort((a, b) => byName(a.split("/").pop()!, b.split("/").pop()!))) {
+      const li = el("li");
+      const b = el("button", "tree-file");
+      b.type = "button";
+      b.style.paddingLeft = `${depth * 14 + 8}px`;
+      b.dataset.path = path;
+      b.append(el("span", "tree-name", path.split("/").pop()));
+      if (ENGINE_FILES.has(path)) {
+        b.classList.add("engine-file");
+        b.title = "Your engine: built from your blocks";
+      }
+      const n = changeCounts.get(path);
+      if (n) b.append(el("span", "tree-badge", `+${n}`));
+      if (path === activeFile) b.setAttribute("aria-current", "true");
+      b.addEventListener("click", () => showFile(path));
+      li.append(b);
+      ul.append(li);
+    }
+    into.append(ul);
+  };
+  renderDir(buildTree(files.map((f) => f.path)), "", 1, header);
+  treeEl.replaceChildren(list);
+}
+
+// Code view -----------------------------------------------------------------
+
+function lineClasses(path: string): string[] {
+  const src = lines(path);
+  const extra: string[] = new Array(src.length).fill("");
+  const add = (i: number, cls: string) => {
+    if (i >= 0 && i < extra.length) extra[i] = extra[i] ? `${extra[i]} ${cls}` : cls;
+  };
+  if (focusRegion) {
+    lineRegions(src).forEach((r, i) => r === focusRegion && add(i, "focus"));
   }
-  if (scroll && first) first.scrollIntoView({ block: "center", behavior: "smooth" });
+  if (tour) {
+    tour.hunks.forEach((h, k) => {
+      if (h.file !== path) return;
+      const now = k === tour!.index;
+      if (h.end === h.start) add(h.start, now ? "removed-here current" : "removed-here");
+      for (let i = h.start; i < h.end; i++) add(i, now ? "changed current" : "changed");
+    });
+  }
+  return extra;
 }
 
-/** The template region a Blockly block corresponds to. */
-function regionOf(type: string): string | null {
-  if (type === ENGINE) return "engine";
-  if (type === TIME) return "time_management";
-  if (type === TT) return "transposition_table";
-  if (type.startsWith("cfs_search_")) return type.slice("cfs_search_".length);
-  if (type.startsWith("cfs_eval_")) return `eval_${type.slice("cfs_eval_".length)}`;
-  return null;
+function showFile(path: string, scrollTo?: number): void {
+  if (!files.some((f) => f.path === path)) path = "src/search.rs";
+  activeFile = path;
+  pathEl.textContent = path;
+  const file = files.find((f) => f.path === path);
+  codeEl.innerHTML = file ? renderCode(file.contents, lineClasses(path)) : "";
+  renderTree();
+  if (scrollTo !== undefined) {
+    const target = codeEl.children[Math.min(scrollTo, codeEl.children.length - 1)] as HTMLElement | undefined;
+    target?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
 }
 
+/** Highlights the code of the selected block, jumping to it if needed. */
 function focusBlock(block: Blockly.Block | null): void {
-  focusRegion = block ? regionOf(block.type) : null;
-  if (!focusRegion) return applyFocus(false);
-  const marker = `// @block ${focusRegion}`;
-  const has = (path: string) => files.find((f) => f.path === path)?.contents.includes(marker);
-  // Stay on the current file if it has the block, else jump to the first that does.
-  const tab = has(activeTab) ? activeTab : tabs.find(has);
-  if (tab) showTab(tab, true);
-  else applyFocus(false);
+  if (tour) return; // the tour owns the highlights while it runs
+  const info = block ? infoForBlockType(block.type) : null;
+  focusRegion = info?.key ?? null;
+  if (!focusRegion) return showFile(activeFile);
+  const firstLine = (path: string) => lineRegions(lines(path)).indexOf(focusRegion);
+  const order = [activeFile, ...files.map((f) => f.path)];
+  const path = order.find((p) => firstLine(p) >= 0);
+  if (path) showFile(path, firstLine(path));
+  else showFile(activeFile);
 }
 
-// Status --------------------------------------------------------------------
+// Tour ----------------------------------------------------------------------
+
+interface Tour {
+  title: string;
+  blocks: BlockInfo[];
+  hunks: Hunk[];
+  /** -1 is the introduction; 0.. are hunks. */
+  index: number;
+  mode: "added" | "explain";
+}
+
+let tour: Tour | null = null;
+
+/** Your engine's files first, then the rest; top to bottom within a file. */
+const TOUR_ORDER = ["src/search.rs", "src/eval.rs", "src/params.rs", "src/main.rs"];
+
+function sortHunks(hunks: Hunk[]): Hunk[] {
+  const rank = (p: string) => {
+    const i = TOUR_ORDER.indexOf(p);
+    return i >= 0 ? i : p.startsWith("src/") ? TOUR_ORDER.length : TOUR_ORDER.length + 1;
+  };
+  return hunks
+    .filter((h) => h.file !== "workspace.json") // bookkeeping, not engine code
+    .sort((a, b) => rank(a.file) - rank(b.file) || a.file.localeCompare(b.file) || a.start - b.start);
+}
+
+function startTour(t: Omit<Tour, "index">): void {
+  tour = { ...t, index: -1 };
+  changeCounts = new Map();
+  for (const h of tour.hunks) changeCounts.set(h.file, (changeCounts.get(h.file) ?? 0) + 1);
+  renderTour();
+}
+
+function endTour(message?: string): void {
+  tour = null;
+  changeCounts = new Map();
+  tourEl.hidden = true;
+  showFile(activeFile);
+  if (message) toast(message);
+}
+
+function hunkText(h: Hunk): string {
+  const src = lines(h.file);
+  const own = explain(src, h.start, h.end);
+  if (own) return own;
+  if (h.file === "src/params.rs") return "The block's parameters as constants. Change them to tune the engine.";
+  // Changes inside a region are explained by the comment at its top.
+  const regions = lineRegions(src);
+  const region = regions[h.start] ?? regions[Math.max(0, h.start - 1)];
+  if (region) {
+    const top = regions.indexOf(region);
+    const above = explain(src, top, h.start);
+    const info = infoForKey(region);
+    if (above) return above;
+    if (info) return `Part of ${info.label}.`;
+  }
+  if (h.file === "src/params.rs") return "The block's parameters as constants. Change them to tune the engine.";
+  if (h.file === "src/main.rs") return "Registers the module so the rest of the engine can use it.";
+  return "Changed by this block.";
+}
+
+function renderTour(): void {
+  if (!tour) return;
+  const t = tour;
+  tourEl.hidden = false;
+  tourEl.style.setProperty("--tour-colour", t.blocks[0]?.colour ?? COLOURS.skeleton);
+  const card = el("div", "tour-card");
+  const head = el("div", "tour-head");
+  head.append(el("strong", "tour-title", t.title));
+  const close = el("button", "tour-x", "×");
+  close.type = "button";
+  close.title = "Skip (Esc)";
+  close.setAttribute("aria-label", "Skip the tour");
+  close.addEventListener("click", () => endTour());
+  head.append(close);
+  card.append(head);
+
+  const fileCount = new Set(t.hunks.map((h) => h.file)).size;
+  const nav = el("div", "tour-nav");
+  const btn = (label: string, cls: string, fn: () => void, disabled = false) => {
+    const b = el("button", `btn ${cls}`, label);
+    b.type = "button";
+    b.disabled = disabled;
+    b.addEventListener("click", fn);
+    nav.append(b);
+    return b;
+  };
+
+  if (t.index === -1) {
+    for (const info of t.blocks) {
+      const p = el("p", "tour-info");
+      if (t.blocks.length > 1) p.append(el("strong", undefined, `${info.label}: `));
+      p.append(info.info, " ");
+      const a = el("a", undefined, "Chess Programming Wiki");
+      a.href = info.cpw;
+      a.target = "_blank";
+      a.rel = "noopener";
+      p.append(a);
+      card.append(p);
+    }
+    const summary =
+      t.hunks.length === 0
+        ? t.mode === "explain"
+          ? "This block has no code of its own here yet. Attach it to the engine to see it."
+          : "No code changed."
+        : t.mode === "added"
+          ? `It changed ${t.hunks.length} ${t.hunks.length === 1 ? "place" : "places"} in ${fileCount} ${fileCount === 1 ? "file" : "files"}.`
+          : `Its code is in ${t.hunks.length} ${t.hunks.length === 1 ? "place" : "places"} in ${fileCount} ${fileCount === 1 ? "file" : "files"}.`;
+    card.append(el("p", "tour-step", summary));
+    if (t.hunks.length) btn("Walk through the code", "primary", () => go(0));
+    btn(t.hunks.length ? "Skip" : "Close", "", () => endTour());
+  } else {
+    const h = t.hunks[t.index]!;
+    const where = el("p", "tour-step");
+    where.append(`Change ${t.index + 1} of ${t.hunks.length} · `, el("code", undefined, `${h.file}:${h.start + 1}`));
+    card.append(where);
+    card.append(el("p", "tour-why", hunkText(h)));
+    if (h.removed > 0) {
+      card.append(
+        el(
+          "p",
+          "tour-note",
+          h.end > h.start
+            ? `Replaces ${h.removed} old ${h.removed === 1 ? "line" : "lines"}.`
+            : `${h.removed} ${h.removed === 1 ? "line was" : "lines were"} removed here.`,
+        ),
+      );
+    }
+    btn("Back", "", () => go(t.index - 1));
+    const last = t.index === t.hunks.length - 1;
+    btn(last ? "Done" : "Next", "primary", () => (last ? endTour("Nice, you've seen every change.") : go(t.index + 1)));
+    btn("Skip", "", () => endTour());
+  }
+  card.append(nav);
+  tourEl.replaceChildren(card);
+  (nav.querySelector(".primary") as HTMLButtonElement | null)?.focus({ preventScroll: true });
+
+  if (t.index >= 0) {
+    const h = t.hunks[t.index]!;
+    showFile(h.file, h.start);
+  } else {
+    showFile(t.hunks[0]?.file ?? activeFile, t.hunks[0]?.start);
+  }
+}
+
+function go(index: number): void {
+  if (!tour) return;
+  tour.index = Math.max(-1, Math.min(index, tour.hunks.length - 1));
+  renderTour();
+}
+
+document.addEventListener("keydown", (e) => {
+  if (!tour || (e.target as HTMLElement).closest("input, select, textarea, .blocklyWidgetDiv")) return;
+  if (e.key === "Escape") endTour();
+  else if (e.key === "ArrowRight" && tour.index < tour.hunks.length - 1) go(tour.index + 1);
+  else if (e.key === "ArrowLeft" && tour.index > -1) go(tour.index - 1);
+  else return;
+  e.preventDefault();
+});
+
+/** Tour of a block's current code (right-click > Explain this block). */
+function explainBlock(block: Blockly.Block): void {
+  const info = infoForBlockType(block.type);
+  if (!info) return;
+  const hunks: Hunk[] = [];
+  for (const f of files) {
+    const regions = lineRegions(lines(f.path));
+    let start = -1;
+    regions.forEach((r, i) => {
+      if (r === info.key && start < 0) start = i;
+      if (r !== info.key && start >= 0) {
+        hunks.push({ file: f.path, start, end: i, removed: 0 });
+        start = -1;
+      }
+    });
+    if (start >= 0) hunks.push({ file: f.path, start, end: regions.length, removed: 0 });
+  }
+  const attached = block.isEnabled() && block.getRootBlock().type === ENGINE;
+  startTour({ title: info.label, blocks: [info], hunks: attached ? sortHunks(hunks) : [], mode: "explain" });
+}
+
+// Status and regeneration ---------------------------------------------------
 
 function renderIssues(issues: Issue[]): void {
   issuesEl.replaceChildren();
-  const errors = issues.filter((i) => i.level === "error");
-  if (errors.length === 0) {
-    const li = document.createElement("li");
-    li.className = "ok";
-    li.textContent = current
-      ? `Ready: ${current.engine.name} compiles as a ${toCrateName(current.engine.name)} Cargo project.`
-      : "Ready.";
-    issuesEl.append(li);
+  if (!issues.some((i) => i.level === "error")) {
+    issuesEl.append(
+      el("li", "ok", current ? `Ready: ${current.engine.name} compiles as the ${toCrateName(current.engine.name)} Cargo project.` : "Ready."),
+    );
   }
-  for (const issue of issues) {
-    const li = document.createElement("li");
-    li.className = issue.level;
-    li.textContent = issue.message;
-    issuesEl.append(li);
-  }
+  for (const issue of issues) issuesEl.append(el("li", issue.level, issue.message));
 }
+
+let lastKeys = new Set<string>();
+let suppressTour = true;
 
 function refresh(): void {
   const { workspace, problems } = readWorkspace(bw);
   current = workspace;
   const issues: Issue[] = problems.map((message) => ({ level: "error", message }));
   if (workspace) issues.push(...validate(workspace));
-
   const blocking = issues.some((i) => i.level === "error");
-  if (workspace && !issues.some((i) => i.level === "error" && !problems.includes(i.message))) {
+
+  const before = files;
+  if (workspace && !blocking) {
     try {
       files = generateProject(workspace);
     } catch (err) {
@@ -192,8 +441,27 @@ function refresh(): void {
   codeEl.classList.toggle("stale", blocking);
   exportBtn.disabled = blocking;
   renderIssues(issues);
-  renderTabs();
-  showTab(activeTab);
+
+  if (!blocking && files !== before) {
+    const keys = placedKeys(workspace);
+    const added = [...keys].filter((k) => !lastKeys.has(k)).map(infoForKey).filter((i): i is BlockInfo => !!i);
+    const removed = [...lastKeys].filter((k) => !keys.has(k)).map(infoForKey).filter((i): i is BlockInfo => !!i);
+    lastKeys = keys;
+
+    if (!suppressTour && added.length > 0) {
+      const old = new Map(before.map((f) => [f.path, f.contents.replace(/\n$/, "").split("\n")]));
+      const hunks = files.flatMap((f) => diffLines(f.path, old.get(f.path) ?? [], f.contents.replace(/\n$/, "").split("\n")));
+      const title = added.length === 1 ? `${added[0]!.label} added` : `${added.length} blocks added`;
+      startTour({ title, blocks: added, hunks: sortHunks(hunks), mode: "added" });
+      return;
+    }
+    if (tour) endTour(); // line numbers moved; the tour no longer matches the code
+    if (!suppressTour && removed.length > 0) {
+      const names = removed.map((r) => r.label).join(", ");
+      toast(`${names} removed, with all ${removed.length === 1 ? "its" : "their"} code.`);
+    }
+  }
+  showFile(activeFile);
 }
 
 let timer: number | undefined;
@@ -243,11 +511,15 @@ function showEngineTop(): void {
   bw.scrollBoundsIntoView(new Blockly.utils.Rect(r.top - 24, r.top + 160, r.left - 24, r.left + 240));
 }
 
+/** Replaces the workspace without starting a tour. */
 function load(ws: Workspace): void {
+  if (tour) endTour();
+  suppressTour = true;
   loadWorkspace(bw, ws);
   showEngineTop();
   refresh();
   save();
+  suppressTour = false;
 }
 
 function download(name: string, data: BlobPart, type: string): void {
@@ -307,11 +579,11 @@ exportBtn.addEventListener("click", () => {
 });
 
 $("copy").addEventListener("click", async () => {
-  const file = files.find((f) => f.path === activeTab);
+  const file = files.find((f) => f.path === activeFile);
   if (!file) return;
   try {
     await navigator.clipboard.writeText(file.contents);
-    toast(`Copied ${activeTab}`);
+    toast(`Copied ${activeFile}`);
   } catch {
     toast("Copy is not available here.");
   }
@@ -319,6 +591,10 @@ $("copy").addEventListener("click", async () => {
 
 // Start ---------------------------------------------------------------------
 
-if (restore()) showEngineTop();
-else load(starterWorkspace());
-refresh();
+if (restore()) {
+  showEngineTop();
+  refresh();
+  suppressTour = false;
+} else {
+  load(starterWorkspace());
+}

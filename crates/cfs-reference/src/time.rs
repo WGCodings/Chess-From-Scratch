@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use cozy_chess::Color;
 
+use crate::params::*;
 use crate::score::MAX_PLY;
 
 /// Limits parsed from a UCI `go` command.
@@ -44,30 +45,6 @@ impl Limits {
     }
 }
 
-/// Tunable time-management settings (the "Time management" block).
-#[derive(Clone, Copy, Debug)]
-pub struct TimeParams {
-    /// Assumed number of moves left when the GUI does not say.
-    pub moves_to_go: u64,
-    /// Percentage of the increment added to each move's budget.
-    pub inc_percent: u64,
-    /// Hard limit as a multiple of the soft limit.
-    pub hard_multiplier: u64,
-    /// Safety margin for GUI and OS latency, in milliseconds.
-    pub overhead_ms: u64,
-}
-
-impl Default for TimeParams {
-    fn default() -> Self {
-        Self {
-            moves_to_go: 25,
-            inc_percent: 75,
-            hard_multiplier: 3,
-            overhead_ms: 25,
-        }
-    }
-}
-
 /// Decides when the search should stop.
 #[derive(Clone, Debug)]
 pub struct TimeManager {
@@ -80,7 +57,7 @@ pub struct TimeManager {
 }
 
 impl TimeManager {
-    pub fn new(limits: &Limits, side: Color, params: &TimeParams) -> Self {
+    pub fn new(limits: &Limits, side: Color) -> Self {
         let start = Instant::now();
         let max_depth = limits
             .depth
@@ -91,19 +68,29 @@ impl TimeManager {
             Color::Black => (limits.btime, limits.binc.unwrap_or(0)),
         };
 
+        // @block time_management
+        // Milliseconds kept back for GUI and operating-system delays.
+        let overhead = TM_OVERHEAD_MS;
+        // @end time_management
+
         let (soft, hard) = if limits.infinite {
             (None, None)
         } else if let Some(movetime) = limits.movetime {
-            let t = movetime.saturating_sub(params.overhead_ms).max(1);
+            let t = movetime.saturating_sub(overhead).max(1);
             (Some(t), Some(t))
         } else if let Some(time) = time {
-            let usable = time.saturating_sub(params.overhead_ms).max(1);
-            let mtg = limits.movestogo.unwrap_or(params.moves_to_go).max(1);
-            let soft = (usable / mtg + inc * params.inc_percent / 100).min(usable);
-            let hard = (soft * params.hard_multiplier)
+            let usable = time.saturating_sub(overhead).max(1);
+            // @block time_management
+            // Soft limit: an even share of the clock plus part of the increment.
+            // Don't start a new iteration after it. Hard limit: a multiple of
+            // it, where a running search is cut off.
+            let mtg = limits.movestogo.unwrap_or(TM_MOVES_TO_GO).max(1);
+            let soft = (usable / mtg + inc * TM_INC_PERCENT / 100).min(usable);
+            let hard = (soft * TM_HARD_MULTIPLIER)
                 .min(usable * 3 / 4)
                 .max(soft.min(usable));
             (Some(soft.max(1)), Some(hard.max(1)))
+            // @end time_management
         } else {
             (None, None)
         };
@@ -125,7 +112,6 @@ impl TimeManager {
                 ..Limits::default()
             },
             Color::White,
-            &TimeParams::default(),
         )
     }
 
@@ -162,7 +148,7 @@ mod tests {
     #[test]
     fn budget_stays_within_clock() {
         let l = Limits::parse(&["wtime", "100", "btime", "100"]);
-        let tm = TimeManager::new(&l, Color::White, &TimeParams::default());
+        let tm = TimeManager::new(&l, Color::White);
         assert!(tm.hard.unwrap() <= Duration::from_millis(100));
         assert!(tm.soft.unwrap() <= tm.hard.unwrap());
     }

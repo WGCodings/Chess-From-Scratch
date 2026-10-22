@@ -7,7 +7,7 @@ import {
   EVAL_TERMS,
   SEARCH_BLOCKS,
   SEARCH_SLOTS,
-  TIME_MANAGEMENT,
+  TIME_BLOCKS,
   TRANSPOSITION_TABLE,
   defaultParams,
   emptyWorkspace,
@@ -17,9 +17,11 @@ import {
   type Params,
   type Score,
   type SearchBlockType,
+  type TimeBlockType,
   type Workspace,
 } from "@cfs/codegen";
 import {
+  BASIC_TIME_BLOCK,
   ENGINE,
   HCE,
   NEGAMAX,
@@ -88,7 +90,15 @@ export function readWorkspace(bw: Blockly.Workspace): ReadResult {
   ws.engine.benchDepth = Number(engine.getFieldValue("BENCH_DEPTH"));
 
   for (const b of stack(engine, "SETTINGS")) {
-    if (b.type === TIME) ws.engine.timeManagement = readParams(b, TIME_MANAGEMENT.params);
+    const time: TimeBlockType | null =
+      b.type === TIME ? "time_management" : b.type === BASIC_TIME_BLOCK ? "basic_time" : null;
+    if (time) {
+      if (ws.engine.timeManagement) {
+        problems.push("Use only one time management block.");
+      } else {
+        ws.engine.timeManagement = { type: time, params: readParams(b, TIME_BLOCKS[time].params) };
+      }
+    }
     if (b.type === TT) ws.engine.transpositionTable = readParams(b, TRANSPOSITION_TABLE.params);
   }
 
@@ -162,9 +172,14 @@ const evalState = (b: BlockInstance<EvalTermType>): BlockState => ({
 
 /** The Blockly state of a whole engine, ready for `serialization.blocks.append`. */
 export function engineState(ws: Workspace, x = 40, y = 40): BlockState {
-  const settings: BlockState[] = [
-    { type: TIME, fields: paramFields(TIME_MANAGEMENT.params, ws.engine.timeManagement) },
-  ];
+  const settings: BlockState[] = [];
+  const tm = ws.engine.timeManagement;
+  if (tm) {
+    settings.push({
+      type: tm.type === "time_management" ? TIME : BASIC_TIME_BLOCK,
+      fields: paramFields(TIME_BLOCKS[tm.type].params, tm.params),
+    });
+  }
   if (ws.engine.transpositionTable) {
     settings.push({ type: TT, fields: paramFields(TRANSPOSITION_TABLE.params, ws.engine.transpositionTable) });
   }
@@ -204,10 +219,16 @@ export function parseWorkspaceFile(text: string): Workspace {
     throw new Error("This is not a Chess From Scratch workspace file.");
   }
   const base = emptyWorkspace();
+  const engine = { ...base.engine, ...data.engine } as Workspace["engine"] & { timeManagement: unknown };
+  // Files from before time blocks existed stored the soft/hard parameters directly.
+  const tm = engine.timeManagement as Record<string, unknown> | null;
+  if (tm && !("type" in tm)) {
+    engine.timeManagement = { type: "time_management", params: tm as Params };
+  }
   return {
     ...base,
     ...data,
-    engine: { ...base.engine, ...data.engine },
+    engine: engine as Workspace["engine"],
     search: { ...base.search, slots: { ...base.search.slots, ...data.search.slots } },
   } as Workspace;
 }

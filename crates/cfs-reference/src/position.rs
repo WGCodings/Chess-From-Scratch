@@ -7,6 +7,7 @@ use cozy_chess::{Board, FenParseError, Move};
 struct Entry {
     board: Board,
     // @block null_move_pruning
+    // Null move pruning needs to know if the last move was a null move.
     null: bool,
     // @end null_move_pruning
 }
@@ -27,6 +28,7 @@ impl Position {
     pub fn from_board(board: Board) -> Self {
         let mut stack = Vec::with_capacity(512);
         // @block null_move_pruning
+        // A normal position: the move that led here was a real move.
         stack.push(Entry { board, null: false });
         // @end null_move_pruning
         Self { stack }
@@ -52,6 +54,7 @@ impl Position {
         let mut board = self.board().clone();
         board.play_unchecked(mv);
         // @block null_move_pruning
+        // A normal position: the move that led here was a real move.
         self.stack.push(Entry { board, null: false });
         // @end null_move_pruning
     }

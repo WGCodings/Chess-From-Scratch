@@ -47,6 +47,7 @@ impl MoveList {
     }
 
     // @block quiescence
+    // Quiescence search only looks at captures, so it needs a capture-only list.
     /// Legal captures (including en passant and capturing promotions).
     pub fn captures(board: &Board) -> Self {
         let mut list = Self::new();

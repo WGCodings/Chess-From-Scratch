@@ -71,11 +71,23 @@ reference crate.
 Drag an Engine block, plug in a Negamax search and a Hand-crafted evaluation,
 then drop feature blocks into their slots. Blocks only fit where they belong
 (typed connections), each block appears once, and loose blocks are greyed out
-and ignored. The right panel shows the generated Rust live; selecting a block
-highlights its code. The status panel lists errors (which block export) and
-warnings. Work autosaves in the browser; Save/Open use the same
-`workspace.json` that every exported project contains. Export downloads the
-complete Cargo project as a zip.
+and ignored.
+
+- **Code view**: a project tree on the right shows every generated file, laid
+  out like the Rust project you export (`.cargo/`, `src/`, `Cargo.toml`, ...).
+  Your engine's files (`search.rs`, `eval.rs`, `params.rs`) are marked.
+  Selecting a block highlights its code.
+- **Change tour**: adding a block explains the idea (with a Chess Programming
+  Wiki link) and then walks through every place in every file that changed,
+  each with a one-line reason taken from the code's own comments. Next/Back
+  or the arrow keys step through it; Skip or Esc closes it. Right-click any
+  block and choose *Explain this block* to tour its code at any time.
+- **Time management**: an engine always has one. Without a time block it uses
+  the Basic rule (time left / 40 + half the increment); the Soft/hard block
+  adds a soft limit for iterations and a hard limit for the search.
+- **Status** lists errors (which block export) and warnings. Work autosaves
+  in the browser; Save/Open use the same `workspace.json` that every exported
+  project contains. Export downloads the complete Cargo project as a zip.
 
 ## Status
 

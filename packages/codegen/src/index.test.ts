@@ -115,6 +115,18 @@ describe("generateProject", () => {
     expect(files.find((f) => f.path === "Cargo.toml")!.contents).toContain('cozy-chess = "0.3.4"');
   });
 
+  it("always has time management: basic time left / 40 without a block", () => {
+    const time = (ws: ReturnType<typeof emptyWorkspace>) =>
+      generateProject(ws).find((f) => f.path === "src/time.rs")!.contents;
+    const params = (ws: ReturnType<typeof emptyWorkspace>) =>
+      generateProject(ws).find((f) => f.path === "src/params.rs")!.contents;
+    expect(time(emptyWorkspace())).toContain("usable / mtg + inc / 2");
+    expect(params(emptyWorkspace())).toContain("pub const TM_MOVES_LEFT: u64 = 40;");
+    expect(params(starterWorkspace())).toContain("// @block basic_time");
+    expect(time(referenceWorkspace())).toContain("TM_HARD_MULTIPLIER");
+    expect(time(referenceWorkspace())).not.toContain("TM_MOVES_LEFT");
+  });
+
   it("puts placed blocks' code in the user's files", () => {
     const files = generateProject(referenceWorkspace());
     const file = (p: string) => files.find((f) => f.path === p)!.contents;
@@ -154,6 +166,7 @@ describe("generateProject", () => {
   });
 
   it("only uses known regions", () => {
-    expect(enabledRegions(referenceWorkspace(), true)).toEqual(new Set(KNOWN_REGIONS));
+    for (const r of enabledRegions(referenceWorkspace(), true)) expect(KNOWN_REGIONS.has(r)).toBe(true);
+    for (const r of enabledRegions(emptyWorkspace())) expect(KNOWN_REGIONS.has(r)).toBe(true);
   });
 });

@@ -20,22 +20,27 @@ pub fn evaluate(board: &Board) -> i32 {
     let mut score = S::default();
 
     // @block eval_pesto
+    // Material and piece-square tables: what each piece is worth on each square.
     score += pesto(board);
     // @end eval_pesto
 
     // @block eval_mobility
+    // Pieces that can move to many safe squares are usually better placed.
     score += mobility(board, MOBILITY);
     // @end eval_mobility
 
     // @block eval_bishop_pair
+    // Two bishops together cover both square colours and work well in open positions.
     score += bishop_pair(board, BISHOP_PAIR);
     // @end eval_bishop_pair
 
     // @block eval_rook_files
+    // Rooks are strongest on files without pawns in their way.
     score += rook_files(board, ROOK_OPEN_FILE, ROOK_HALF_OPEN_FILE);
     // @end eval_rook_files
 
     // @block eval_passed_pawns
+    // A pawn no enemy pawn can stop may promote; the closer, the more valuable.
     score += passed_pawns(board, PASSED_PAWN);
     // @end eval_passed_pawns
 

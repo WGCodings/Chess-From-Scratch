@@ -12,7 +12,7 @@ use cozy_chess::{Board, Move};
 
 use crate::moves::MoveList;
 use crate::position::Position;
-use crate::time::{Limits, TimeManager, TimeParams};
+use crate::time::{Limits, TimeManager};
 
 /// What a finished search returns.
 #[derive(Clone, Copy, Debug, Default)]
@@ -26,6 +26,7 @@ pub trait Engine: Send + Sized + 'static {
     const NAME: &'static str;
     const AUTHOR: &'static str;
     // @block transposition_table
+    // Default Hash size in MB, overridden by the engine.
     const DEFAULT_HASH_MB: usize = 16;
     // @end transposition_table
     /// Depth used by `bench` when no depth is given.
@@ -35,11 +36,9 @@ pub trait Engine: Send + Sized + 'static {
     /// Forget everything learned (TT, history, killers).
     fn new_game(&mut self);
     // @block transposition_table
+    // Called when the GUI sets the Hash option.
     fn set_hash(&mut self, mb: usize);
     // @end transposition_table
-    fn time_params() -> TimeParams {
-        TimeParams::default()
-    }
     /// Searches `pos`. Must return promptly once `stop` is set.
     fn search(
         &mut self,
@@ -77,6 +76,7 @@ pub fn run<E: Engine>() {
                 println!("id name {}", E::NAME);
                 println!("id author {}", E::AUTHOR);
                 // @block transposition_table
+                // Tell the GUI the hash table size can be configured.
                 println!(
                     "option name Hash type spin default {} min 1 max 65536",
                     E::DEFAULT_HASH_MB
@@ -91,6 +91,7 @@ pub fn run<E: Engine>() {
                 engine.as_mut().unwrap().new_game();
             }
             // @block transposition_table
+            // The GUI changes an option (only Hash for now).
             "setoption" => {
                 wait(&mut thread, &mut engine);
                 set_option::<E>(engine.as_mut().unwrap(), &tokens);
@@ -111,7 +112,7 @@ pub fn run<E: Engine>() {
                     continue;
                 }
                 let limits = Limits::parse(&tokens[1..]);
-                let tm = TimeManager::new(&limits, pos.board().side_to_move(), &E::time_params());
+                let tm = TimeManager::new(&limits, pos.board().side_to_move());
                 stop.store(false, Ordering::Relaxed);
                 let mut e = engine.take().unwrap();
                 let p = pos.clone();

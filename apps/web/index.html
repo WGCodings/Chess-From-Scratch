@@ -33,13 +33,16 @@
       <div id="workspace" class="workspace"></div>
 
       <aside class="side">
-        <nav class="tabs" id="tabs" role="tablist"></nav>
-        <div class="code-wrap">
-          <div class="code-head">
-            <span id="code-path" class="code-path"></span>
-            <button id="copy" class="btn small" type="button">Copy</button>
+        <div class="explorer">
+          <nav id="tree" class="tree" aria-label="Project files"></nav>
+          <div class="code-wrap">
+            <div class="code-head">
+              <span id="code-path" class="code-path"></span>
+              <button id="copy" class="btn small" type="button">Copy</button>
+            </div>
+            <section id="tour" class="tour" hidden aria-live="polite"></section>
+            <pre id="code" class="code" tabindex="0"></pre>
           </div>
-          <pre id="code" class="code" tabindex="0"></pre>
         </div>
         <section class="issues" aria-live="polite">
           <h2>Status</h2>

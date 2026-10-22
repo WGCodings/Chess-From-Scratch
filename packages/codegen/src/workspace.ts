@@ -6,7 +6,7 @@ import {
   EVAL_TERMS,
   SEARCH_BLOCKS,
   SEARCH_SLOTS,
-  TIME_MANAGEMENT,
+  TIME_BLOCKS,
   TRANSPOSITION_TABLE,
   defaultParams,
   type EvalTermType,
@@ -14,6 +14,7 @@ import {
   type ParamValue,
   type SearchBlockType,
   type SearchSlot,
+  type TimeBlockType,
 } from "./blocks";
 
 export const WORKSPACE_FORMAT_VERSION = 1;
@@ -36,7 +37,8 @@ export interface Workspace {
     author: string;
     /** Depth `bench` searches when run without an argument. */
     benchDepth: number;
-    timeManagement: Params;
+    /** `null` when no time block is placed: then basic time left / 40 is used. */
+    timeManagement: BlockInstance<TimeBlockType> | null;
     /** `null` when the transposition table block is not placed. */
     transpositionTable: Params | null;
   };
@@ -66,7 +68,7 @@ export function emptyWorkspace(name = "My Engine", author = "me"): Workspace {
       name,
       author,
       benchDepth: DEFAULT_BENCH_DEPTH,
-      timeManagement: defaultParams(TIME_MANAGEMENT.params),
+      timeManagement: null,
       transpositionTable: null,
     },
     search: {
@@ -77,9 +79,14 @@ export function emptyWorkspace(name = "My Engine", author = "me"): Workspace {
   };
 }
 
+export function timeBlock(type: TimeBlockType): BlockInstance<TimeBlockType> {
+  return { type, params: defaultParams(TIME_BLOCKS[type].params) };
+}
+
 /** Every MVP block with default parameters: generates the reference engine. */
 export function referenceWorkspace(): Workspace {
   const ws = emptyWorkspace("CFS Reference", "WG");
+  ws.engine.timeManagement = timeBlock("time_management");
   ws.engine.transpositionTable = defaultParams(TRANSPOSITION_TABLE.params);
   for (const type of Object.keys(SEARCH_BLOCKS) as SearchBlockType[]) {
     ws.search.slots[SEARCH_BLOCKS[type].slot].push(searchBlock(type));
@@ -91,6 +98,7 @@ export function referenceWorkspace(): Workspace {
 /** A sensible starting point for beginners: PeSTO eval and a few safe blocks. */
 export function starterWorkspace(): Workspace {
   const ws = emptyWorkspace();
+  ws.engine.timeManagement = timeBlock("basic_time");
   ws.engine.transpositionTable = defaultParams(TRANSPOSITION_TABLE.params);
   for (const type of ["tt_move_ordering", "mvv_lva", "quiescence"] as const) {
     ws.search.slots[SEARCH_BLOCKS[type].slot].push(searchBlock(type));
@@ -158,7 +166,12 @@ export function validate(ws: Workspace): Issue[] {
     issues.push({ level: "error", message: `Bench depth must be a whole number from 1 to ${MAX_BENCH_DEPTH}.` });
   }
 
-  checkParams("Time management", TIME_MANAGEMENT.params, ws.engine.timeManagement, issues);
+  const tm = ws.engine.timeManagement;
+  if (tm) {
+    const spec = TIME_BLOCKS[tm.type];
+    if (!spec) issues.push({ level: "error", message: `Unknown time block "${tm.type}".` });
+    else checkParams(spec.label, spec.params, tm.params, issues);
+  }
   if (ws.engine.transpositionTable) {
     checkParams("Transposition table", TRANSPOSITION_TABLE.params, ws.engine.transpositionTable, issues);
   }
@@ -224,6 +237,8 @@ export function enabledRegions(ws: Workspace, includeTests = false): Set<string>
   const regions = new Set<string>();
   if (includeTests) regions.add("tests");
   if (ws.engine.transpositionTable) regions.add("transposition_table");
+  // Without a time block the engine uses basic time management.
+  regions.add(ws.engine.timeManagement?.type ?? "basic_time");
   for (const slot of SEARCH_SLOTS) {
     for (const block of ws.search.slots[slot]) regions.add(block.type);
   }
@@ -234,6 +249,8 @@ export function enabledRegions(ws: Workspace, includeTests = false): Set<string>
 /** Every region name a template may use. */
 export const KNOWN_REGIONS: ReadonlySet<string> = new Set([
   "tests",
+  "basic_time",
+  "time_management",
   "transposition_table",
   ...Object.keys(SEARCH_BLOCKS),
   ...Object.keys(EVAL_TERMS).map((t) => `eval_${t}`),

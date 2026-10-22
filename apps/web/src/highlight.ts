@@ -38,22 +38,17 @@ function highlightLine(line: string): string {
   return out + escape(line.slice(last));
 }
 
-const BLOCK = /^\s*\/\/ @block (\w+)/;
-const END = /^\s*\/\/ @end (\w+)/;
-
-/** Highlighted HTML, one `<div class="ln">` per line, region-tagged. */
-export function renderCode(source: string): string {
-  let region: string | null = null;
+/**
+ * Highlighted HTML, one `<div class="ln">` per line. `extra[i]` adds classes
+ * to line i (focus, tour highlights).
+ */
+export function renderCode(source: string, extra: string[] = []): string {
   return source
     .replace(/\n$/, "")
     .split("\n")
-    .map((line) => {
-      const start = BLOCK.exec(line);
-      if (start) region = start[1]!;
-      const attr = region ? ` data-region="${region}"` : "";
-      const html = `<div class="ln"${attr}>${highlightLine(line) || " "}</div>`;
-      if (END.test(line)) region = null;
-      return html;
+    .map((line, i) => {
+      const cls = extra[i] ? `ln ${extra[i]}` : "ln";
+      return `<div class="${cls}">${highlightLine(line) || " "}</div>`;
     })
     .join("");
 }

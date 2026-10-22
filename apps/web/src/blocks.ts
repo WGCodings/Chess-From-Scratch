@@ -9,6 +9,7 @@ import {
   MAX_BENCH_DEPTH,
   DEFAULT_BENCH_DEPTH,
   SEARCH_BLOCKS,
+  BASIC_TIME,
   TIME_MANAGEMENT,
   TRANSPOSITION_TABLE,
   type EvalTermType,
@@ -23,6 +24,7 @@ export const ENGINE = "cfs_engine";
 export const NEGAMAX = "cfs_negamax";
 export const HCE = "cfs_hce";
 export const TIME = "cfs_time_management";
+export const BASIC_TIME_BLOCK = "cfs_basic_time";
 export const TT = "cfs_transposition_table";
 
 export const searchType = (t: SearchBlockType) => `cfs_search_${t}`;
@@ -177,6 +179,12 @@ export function defineBlocks(): void {
       colour: COLOURS.engine,
       tooltip: "The root of your engine. Plug a search and an evaluation into it.",
     },
+    paramBlock(BASIC_TIME_BLOCK, BASIC_TIME.label, BASIC_TIME.params, {
+      previousStatement: "engine_setting",
+      nextStatement: "engine_setting",
+      colour: COLOURS.setting,
+      tooltip: BASIC_TIME.description,
+    }),
     paramBlock(TIME, TIME_MANAGEMENT.label, TIME_MANAGEMENT.params, {
       previousStatement: "engine_setting",
       nextStatement: "engine_setting",
@@ -244,6 +252,7 @@ export function maxInstances(): Record<string, number> {
     NEGAMAX,
     HCE,
     TIME,
+    BASIC_TIME_BLOCK,
     TT,
     ...(Object.keys(SEARCH_BLOCKS) as SearchBlockType[]).map(searchType),
     ...(Object.keys(EVAL_TERMS) as EvalTermType[]).map(evalType),
@@ -270,6 +279,7 @@ export function toolbox(): Blockly.utils.toolbox.ToolboxDefinition {
     contents: [
       category("Engine", COLOURS.engine, [
         { kind: "block", type: ENGINE },
+        { kind: "block", type: BASIC_TIME_BLOCK },
         { kind: "block", type: TIME },
         { kind: "block", type: TT },
       ]),

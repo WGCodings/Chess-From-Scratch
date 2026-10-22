@@ -85,8 +85,7 @@ body {
 }
 
 .btn:focus-visible,
-select:focus-visible,
-.tab:focus-visible {
+select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -134,7 +133,7 @@ select:focus-visible,
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 42%);
+  grid-template-columns: minmax(0, 1fr) minmax(480px, 48%);
 }
 
 .workspace {
@@ -150,33 +149,114 @@ select:focus-visible,
   background: var(--code-bg);
 }
 
-/* Tabs and code --------------------------------------------------------- */
+/* File tree ------------------------------------------------------------- */
 
-.tabs {
-  display: flex;
-  gap: 2px;
-  padding: 6px 8px 0;
+.explorer {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 176px minmax(0, 1fr);
+}
+
+.tree {
   background: #181c19;
-  overflow-x: auto;
+  border-right: 1px solid #2c322d;
+  overflow: auto;
+  padding: 8px 0 16px;
+  font: 12.5px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 
-.tab {
-  font: inherit;
-  font-size: 12px;
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-  padding: 7px 12px;
-  border: none;
-  border-radius: 6px 6px 0 0;
-  background: transparent;
-  color: var(--code-dim);
-  cursor: pointer;
-  white-space: nowrap;
+.tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
-.tab[aria-selected="true"] {
-  background: var(--code-bg);
+.tree-root > li > .tree-label {
+  display: block;
+  padding: 2px 10px 6px;
   color: var(--code-ink);
+  font-weight: 600;
 }
+
+.tree-label,
+.tree-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  padding: 2px 8px;
+  cursor: pointer;
+  color: var(--code-dim);
+}
+
+.tree-dir > .tree-label {
+  color: #b9bfb4;
+}
+
+.tree-root > li > .tree-label::before {
+  content: none;
+}
+
+.tree-dir > .tree-label::before {
+  content: "▸";
+  font-size: 10px;
+  width: 10px;
+}
+
+.tree-dir.open > .tree-label::before {
+  content: "▾";
+}
+
+.tree-file::before {
+  content: "";
+  width: 10px;
+}
+
+.tree-file:hover,
+.tree-label:hover {
+  color: var(--code-ink);
+  background: #222823;
+}
+
+.tree-file[aria-current="true"] {
+  color: var(--code-ink);
+  background: var(--code-bg);
+  box-shadow: inset 2px 0 0 var(--focus-bar);
+}
+
+.tree-file.engine-file .tree-name {
+  color: #e9ecd9;
+  font-weight: 600;
+}
+
+.tree-file.engine-file::before {
+  content: "●";
+  font-size: 8px;
+  color: var(--focus-bar);
+}
+
+.tree-badge {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #1f2420;
+  background: var(--focus-bar);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+
+.tree-file:focus-visible,
+.tree-label:focus-visible {
+  outline: 2px solid var(--focus-bar);
+  outline-offset: -2px;
+}
+
+/* Code ------------------------------------------------------------------ */
 
 .code-wrap {
   flex: 1;
@@ -233,6 +313,107 @@ select:focus-visible,
 .ln.focus {
   background: var(--focus-bg);
   border-left-color: var(--focus-bar);
+}
+
+.ln.changed {
+  background: rgba(126, 200, 152, 0.09);
+  border-left-color: rgba(126, 200, 152, 0.45);
+}
+
+.ln.changed.current {
+  background: rgba(126, 200, 152, 0.24);
+  border-left-color: var(--focus-bar);
+}
+
+.ln.removed-here {
+  box-shadow: inset 0 2px 0 rgba(229, 130, 110, 0.55);
+}
+
+.ln.removed-here.current {
+  box-shadow: inset 0 2px 0 #e5826e;
+}
+
+/* Tour ------------------------------------------------------------------ */
+
+.tour {
+  padding: 10px 12px 0;
+  background: var(--code-bg);
+}
+
+.tour-card {
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: 10px;
+  border-left: 5px solid var(--tour-colour, var(--accent));
+  padding: 12px 14px 12px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  max-height: 38vh;
+  overflow: auto;
+}
+
+.tour-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tour-title {
+  font-size: 14px;
+}
+
+.tour-x {
+  border: none;
+  background: none;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.tour-info,
+.tour-why {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 8px 0 0;
+}
+
+.tour-info a {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.tour-why {
+  font-size: 14px;
+}
+
+.tour-step {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tour-step code {
+  font: 12px ui-monospace, "Cascadia Code", Consolas, monospace;
+  color: var(--ink);
+}
+
+.tour-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #a1442f;
+}
+
+.tour-nav {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.tour-nav .btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .tk-comment {
@@ -357,6 +538,15 @@ select:focus-visible,
   .side {
     border-left: none;
     border-top: 1px solid var(--line);
-    height: 80vh;
+    height: 85vh;
+  }
+  .explorer {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .tree {
+    max-height: 160px;
+    border-right: none;
+    border-bottom: 1px solid #2c322d;
   }
 }

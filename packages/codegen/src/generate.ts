@@ -5,7 +5,8 @@
 import {
   EVAL_TERMS,
   SEARCH_BLOCKS,
-  TIME_MANAGEMENT,
+  BASIC_TIME,
+  TIME_BLOCKS,
   TRANSPOSITION_TABLE,
   type ParamSpec,
   type ParamValue,
@@ -104,7 +105,17 @@ export function generateParams(ws: Workspace): string {
   ];
   const push = (s: string | null) => s && sections.push(s);
 
-  push(paramSection("time_management", TIME_MANAGEMENT.params, ws.engine.timeManagement));
+  const tm = ws.engine.timeManagement;
+  if (tm) {
+    push(paramSection(tm.type, TIME_BLOCKS[tm.type].params, tm.params));
+  } else {
+    sections.push(
+      [
+        "// No time management block placed: basic time management with time left / 40.",
+        ...BASIC_TIME.params.map((s) => rustConst(s, s.default)),
+      ].join("\n"),
+    );
+  }
   if (ws.engine.transpositionTable) {
     push(paramSection("transposition_table", TRANSPOSITION_TABLE.params, ws.engine.transpositionTable));
   }

@@ -54,6 +54,28 @@ describe("blocks <-> workspace", () => {
     bw.dispose();
   });
 
+  it("reads both time blocks and rejects two at once", () => {
+    const ws = starterWorkspace();
+    expect(roundTrip(ws)!.engine.timeManagement?.type).toBe("basic_time");
+    const bw = new Blockly.Workspace();
+    loadWorkspace(bw, referenceWorkspace());
+    const engine = bw.getBlocksByType("cfs_engine", false)[0]!;
+    const basic = bw.newBlock("cfs_basic_time");
+    engine.getInput("SETTINGS")!.connection!.connect(basic.previousConnection!);
+    expect(readWorkspace(bw).problems).toContain("Use only one time management block.");
+    bw.dispose();
+  });
+
+  it("migrates files saved before time blocks existed", () => {
+    const old = JSON.parse(JSON.stringify(referenceWorkspace()));
+    old.engine.timeManagement = { movesToGo: 30, incPercent: 75, hardMultiplier: 3, overheadMs: 25 };
+    const ws = parseWorkspaceFile(JSON.stringify(old));
+    expect(ws.engine.timeManagement).toEqual({
+      type: "time_management",
+      params: { movesToGo: 30, incPercent: 75, hardMultiplier: 3, overheadMs: 25 },
+    });
+  });
+
   it("parses exported workspace files", () => {
     const json = generateProject(starterWorkspace()).find((f) => f.path === "workspace.json")!.contents;
     expect(parseWorkspaceFile(json)).toEqual(starterWorkspace());

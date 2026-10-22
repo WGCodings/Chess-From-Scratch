@@ -13,10 +13,11 @@ use crate::moves::{is_capture, is_quiet, MoveList, PvTable};
 use crate::params::*;
 use crate::position::Position;
 use crate::score::{print_info, IterationInfo, INF, MATE, MATE_BOUND, MAX_PLY};
-use crate::time::{TimeManager, TimeParams};
+use crate::time::TimeManager;
 use crate::uci::{Engine, SearchResult};
 
 // @block transposition_table
+// The transposition table stores results of positions searched before.
 use crate::tt::{score_from_tt, score_to_tt, Bound, TranspositionTable};
 // @end transposition_table
 
@@ -29,15 +30,19 @@ pub struct Searcher {
     tm: TimeManager,
     pv: PvTable,
     // @block transposition_table
+    // Remembers search results by position hash, shared across iterations.
     tt: TranspositionTable,
     // @end transposition_table
     // @block killers
+    // Quiet moves that recently caused a cutoff, per ply.
     killers: Killers,
     // @end killers
     // @block history
+    // How often each quiet move caused a cutoff, over the whole search.
     history: History,
     // @end history
     // @block late_move_reductions
+    // Precomputed reductions by depth and move number.
     lmr: [[i32; 64]; 64],
     // @end late_move_reductions
 }
@@ -47,6 +52,7 @@ impl Engine for Searcher {
     const AUTHOR: &'static str = ENGINE_AUTHOR;
     const BENCH_DEPTH: i32 = ENGINE_BENCH_DEPTH;
     // @block transposition_table
+    // Default size of the transposition table, shown to GUIs as the Hash option.
     const DEFAULT_HASH_MB: usize = TT_HASH_MB;
     // @end transposition_table
 
@@ -60,15 +66,19 @@ impl Engine for Searcher {
             tm: TimeManager::fixed_depth(1),
             pv: PvTable::default(),
             // @block transposition_table
+            // Allocate the transposition table with the default Hash size.
             tt: TranspositionTable::new(TT_HASH_MB),
             // @end transposition_table
             // @block killers
+            // Start with empty killer slots.
             killers: Killers::default(),
             // @end killers
             // @block history
+            // Start with all history scores at zero.
             history: History::default(),
             // @end history
             // @block late_move_reductions
+            // Fill the reduction table once at startup.
             lmr: lmr_table(),
             // @end late_move_reductions
         }
@@ -76,30 +86,25 @@ impl Engine for Searcher {
 
     fn new_game(&mut self) {
         // @block transposition_table
+        // A new game: old positions are no longer useful.
         self.tt.clear();
         // @end transposition_table
         // @block killers
+        // A new game: forget the killer moves.
         self.killers.clear();
         // @end killers
         // @block history
+        // A new game: forget the history scores.
         self.history.clear();
         // @end history
     }
 
     // @block transposition_table
+    // The GUI changed the Hash option: reallocate the table.
     fn set_hash(&mut self, mb: usize) {
         self.tt.resize(mb);
     }
     // @end transposition_table
-
-    fn time_params() -> TimeParams {
-        TimeParams {
-            moves_to_go: TM_MOVES_TO_GO,
-            inc_percent: TM_INC_PERCENT,
-            hard_multiplier: TM_HARD_MULTIPLIER,
-            overhead_ms: TM_OVERHEAD_MS,
-        }
-    }
 
     /// Iterative deepening: search depth 1, 2, 3, ... until time runs out.
     fn search(
@@ -115,6 +120,7 @@ impl Engine for Searcher {
         self.stop = stop;
         self.tm = tm;
         // @block killers
+        // Killers are tied to plies of one search, so start each search fresh.
         self.killers.clear();
         // @end killers
 
@@ -162,6 +168,7 @@ impl Engine for Searcher {
 impl Searcher {
     fn hashfull(&self) -> usize {
         // @block transposition_table
+        // How full the table is, reported to the GUI in permille.
         self.tt.hashfull()
         // @else
         0
@@ -181,6 +188,8 @@ impl Searcher {
 
     fn search_root(&mut self, pos: &mut Position, depth: i32, prev_score: i32) -> i32 {
         // @block aspiration_windows
+        // Search with a narrow window around the last score; most iterations land inside it,
+        // which is cheaper.
         if depth >= ASP_MIN_DEPTH {
             let mut delta = ASP_DELTA;
             let mut alpha = (prev_score - delta).max(-INF);
@@ -217,6 +226,8 @@ impl Searcher {
 
         if depth <= 0 {
             // @block quiescence
+            // At depth 0 keep searching captures so we never evaluate in the middle of an
+            // exchange.
             return self.qsearch(pos, ply, alpha, beta);
             // @else
             return evaluate(pos.board());
@@ -242,6 +253,8 @@ impl Searcher {
         let mut tt_move: Option<Move> = None;
 
         // @block transposition_table
+        // Seen this position before at enough depth? Reuse that result, and remember its best
+        // move.
         if let Some(entry) = self.tt.probe(board.hash()) {
             tt_move = entry.mv();
             let tt_score = score_from_tt(entry.score, ply);
@@ -254,6 +267,7 @@ impl Searcher {
         let static_eval = if in_check { -INF } else { evaluate(&board) };
 
         // @block reverse_futility_pruning
+        // Static eval is far above beta even after a safety margin: assume the node fails high.
         if !pv_node
             && !in_check
             && depth <= RFP_MAX_DEPTH
@@ -264,6 +278,8 @@ impl Searcher {
         // @end reverse_futility_pruning
 
         // @block null_move_pruning
+        // Give the opponent a free move. If a reduced search still beats beta, this node is good
+        // enough to cut.
         if !pv_node
             && !in_check
             && depth >= NMP_MIN_DEPTH
@@ -293,16 +309,20 @@ impl Searcher {
             let mv = moves.get(i);
             let mut order = 0;
             // @block tt_move_ordering
+            // The best move from the transposition table is the most likely best move: try it
+            // first.
             if Some(mv) == tt_move {
                 order = 1_000_000;
             }
             // @end tt_move_ordering
             // @block mvv_lva
+            // Try captures next, the most valuable victim first and with the cheapest attacker.
             if order == 0 && is_capture(&board, mv) {
                 order = 100_000 + mvv_lva(&board, mv);
             }
             // @end mvv_lva
             // @block killers
+            // Quiet moves that caused a cutoff at this ply in a sibling node.
             if order == 0 {
                 match self.killers.slot(ply, mv) {
                     Some(0) => order = 90_000,
@@ -312,6 +332,7 @@ impl Searcher {
             }
             // @end killers
             // @block history
+            // Other quiet moves: those that often caused cutoffs before go first.
             if order == 0 {
                 order = self.history.get(stm, mv);
             }
@@ -336,6 +357,7 @@ impl Searcher {
             } else {
                 let mut r = 0;
                 // @block late_move_reductions
+                // Late quiet moves rarely matter: search them at reduced depth.
                 let min_moves = if pv_node {
                     LMR_MIN_MOVES_PV
                 } else {
@@ -347,6 +369,8 @@ impl Searcher {
                 // @end late_move_reductions
 
                 // @block principal_variation_search
+                // After the first move, prove a move is no better with a cheap zero-window
+                // search; re-search only if it is.
                 score = -self.negamax(pos, new_depth - r, ply + 1, -alpha - 1, -alpha);
                 if score > alpha && r > 0 {
                     score = -self.negamax(pos, new_depth, ply + 1, -alpha - 1, -alpha);
@@ -375,11 +399,14 @@ impl Searcher {
                     self.pv.update(ply, mv);
                     if score >= beta {
                         // @block killers
+                        // Remember this quiet move as a killer for this ply.
                         if quiet {
                             self.killers.push(ply, mv);
                         }
                         // @end killers
                         // @block history
+                        // Reward the quiet move that caused the cutoff, punish the quiet moves
+                        // tried before it.
                         if quiet {
                             let bonus = (depth * depth).min(HISTORY_BONUS_MAX);
                             self.history.update(stm, mv, bonus);
@@ -398,6 +425,7 @@ impl Searcher {
         }
 
         // @block transposition_table
+        // Store the result so later visits to this position can reuse it.
         let bound = if best_score >= beta {
             Bound::Lower
         } else if best_score > original_alpha {
