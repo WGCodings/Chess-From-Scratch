@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { generateProject, starterWorkspace, timeBlock } from "@cfs/codegen";
+import { generateProject, referenceWorkspace, starterWorkspace, timeBlock } from "@cfs/codegen";
 import { diffLines, explain, lineRegions } from "./diff";
 
 describe("diffLines", () => {
@@ -8,18 +8,20 @@ describe("diffLines", () => {
     const after = ["a", "x", "b", "c2", "d"];
     expect(diffLines("f", before, after)).toEqual([
       { file: "f", start: 1, end: 2, removed: 0 },
-      { file: "f", start: 3, end: 4, removed: 1 },
+      { file: "f", start: 3, end: 4, removed: 1, removedLines: ["c"] },
     ]);
   });
 
   it("reports pure removals at their position", () => {
-    expect(diffLines("f", ["a", "b", "c"], ["a", "c"])).toEqual([{ file: "f", start: 1, end: 1, removed: 1 }]);
+    expect(diffLines("f", ["a", "b", "c"], ["a", "c"])).toEqual([
+      { file: "f", start: 1, end: 1, removed: 1, removedLines: ["b"] },
+    ]);
   });
 
   it("finds the changes a block makes in generated code", () => {
-    const before = starterWorkspace();
-    const after = starterWorkspace();
-    after.search.slots.pruning.push({ type: "null_move_pruning", params: { minDepth: 3, baseReduction: 3, depthDivisor: 4 } });
+    const after = referenceWorkspace();
+    const before = referenceWorkspace();
+    before.search.slots.pruning = before.search.slots.pruning.filter((b) => b.type !== "null_move_pruning");
     const a = new Map(generateProject(before).map((f) => [f.path, f.contents.split("\n")]));
     const hunks = generateProject(after).flatMap((f) => diffLines(f.path, a.get(f.path) ?? [], f.contents.split("\n")));
     const files = new Set(hunks.map((h) => h.file));
@@ -49,5 +51,20 @@ describe("lineRegions", () => {
     ws.engine.timeManagement = timeBlock("time_management");
     const time = generateProject(ws).find((f) => f.path === "src/time.rs")!.contents.split("\n");
     expect(lineRegions(time)).toContain("time_management");
+  });
+});
+
+import { splitSections, describeCode } from "./diff";
+
+describe("splitSections", () => {
+  it("starts a section at each comment that follows code", () => {
+    const lines = ["// a", "x();", "", "// b", "// b2", "y();", "}", "// @end q"];
+    expect(splitSections(lines, 0, lines.length)).toEqual([
+      [0, 3],
+      [3, 7],
+    ]);
+  });
+  it("describes uncommented imports", () => {
+    expect(describeCode(["use crate::x;"], 0, 1)).toMatch(/^Imports/);
   });
 });

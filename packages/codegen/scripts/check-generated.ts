@@ -19,6 +19,7 @@ import {
   referenceWorkspace,
   starterWorkspace,
   toCrateName,
+  validate,
   type EvalTermType,
   type SearchBlockType,
   type Workspace,
@@ -43,13 +44,34 @@ function without(type: SearchBlockType | EvalTermType | "transposition_table"): 
   return ws;
 }
 
+/** The bare-bones starter plus the given search blocks, in the order a beginner adds them. */
+function bareWith(name: string, types: SearchBlockType[]): Workspace {
+  const ws = starterWorkspace();
+  ws.engine.name = name;
+  ws.engine.benchDepth = 4;
+  for (const type of types) {
+    ws.search.slots[SEARCH_BLOCKS[type].slot].push({ type, params: referenceWorkspace().search.slots[SEARCH_BLOCKS[type].slot].find((b) => b.type === type)!.params });
+  }
+  return ws;
+}
+
+const removals: (SearchBlockType | EvalTermType | "transposition_table")[] = [
+  "transposition_table",
+  ...(Object.keys(SEARCH_BLOCKS) as SearchBlockType[]),
+  ...(Object.keys(EVAL_TERMS) as EvalTermType[]),
+];
+
 const cases: { ws: Workspace; bench?: number }[] = [
   { ws: referenceWorkspace(), bench: REFERENCE_BENCH },
   { ws: starterWorkspace() },
-  { ws: emptyWorkspace("bare skeleton") },
-  { ws: without("transposition_table") },
-  ...(Object.keys(SEARCH_BLOCKS) as SearchBlockType[]).map((t) => ({ ws: without(t) })),
-  ...(Object.keys(EVAL_TERMS) as EvalTermType[]).map((t) => ({ ws: without(t) })),
+  { ws: emptyWorkspace("empty skeleton") },
+  { ws: bareWith("bare plus mvv lva", ["mvv_lva"]) },
+  { ws: bareWith("bare plus alpha beta", ["alpha_beta"]) },
+  { ws: bareWith("bare plus ab qs", ["alpha_beta", "quiescence"]) },
+  { ws: bareWith("bare plus ab pvs", ["alpha_beta", "principal_variation_search"]) },
+  { ws: bareWith("bare plus ab lmr", ["alpha_beta", "late_move_reductions"]) },
+  // Removing a block others depend on is not a valid workspace; those are skipped.
+  ...removals.map((t) => ({ ws: without(t) })).filter(({ ws }) => !validate(ws).some((i) => i.level === "error")),
 ];
 
 const root = mkdtempSync(join(tmpdir(), "cfs-gen-"));
@@ -78,7 +100,7 @@ for (const { ws, bench } of cases) {
     run("cargo", ["fmt", "--check"], dir);
     run("cargo", ["clippy", "--release", "--quiet", "--", "-D", "warnings"], dir);
     run("cargo", ["build", "--release", "--quiet"], dir);
-    const out = run(join(targetDir, "release", name), ["bench", "5"], dir);
+    const out = run(join(targetDir, "release", name), ["bench"], dir);
     let note = out.trim();
     if (bench !== undefined) {
       const full = run(join(targetDir, "release", name), ["bench"], dir);

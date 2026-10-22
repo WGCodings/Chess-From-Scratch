@@ -41,6 +41,7 @@ export const SEARCH_SLOTS: readonly SearchSlot[] = [
 ];
 
 export type SearchBlockType =
+  | "alpha_beta"
   | "aspiration_windows"
   | "reverse_futility_pruning"
   | "null_move_pruning"
@@ -67,8 +68,8 @@ interface BlockSpecBase {
 
 export interface SearchBlockSpec extends BlockSpecBase {
   slot: SearchSlot;
-  /** Engine-level blocks this one needs. */
-  requires?: "transposition_table"[];
+  /** Blocks this one needs: other search blocks or the transposition table. */
+  requires?: (SearchBlockType | "transposition_table")[];
 }
 
 export type EvalTermSpec = BlockSpecBase;
@@ -111,12 +112,21 @@ export const TRANSPOSITION_TABLE: BlockSpecBase = {
 };
 
 export const SEARCH_BLOCKS: Record<SearchBlockType, SearchBlockSpec> = {
+  alpha_beta: {
+    label: "Alpha-beta pruning",
+    description: "Stops searching a node's moves as soon as one proves the opponent will avoid it.",
+    info: "Plain negamax looks at every move. Alpha-beta keeps a window: alpha is the score we can already reach, beta the score the opponent will allow. A move that scores beta or more refutes the opponent's previous move, so the remaining moves are skipped (a beta cutoff). The result is the same as plain negamax, found much faster, especially when good moves are tried first. Most other search blocks build on it.",
+    cpw: "https://www.chessprogramming.org/Alpha-Beta",
+    slot: "move_loop",
+    params: [],
+  },
   aspiration_windows: {
     label: "Aspiration windows",
     description: "Searches with a narrow window around the previous score, widening on failure.",
     slot: "root",
     info: "Instead of searching with the full window (-infinity, +infinity), iterative deepening searches around the previous iteration's score with a small margin. Most of the time the true score lands inside, and the narrow window prunes more. If it falls outside, the window is widened and the depth searched again.",
     cpw: "https://www.chessprogramming.org/Aspiration_Windows",
+    requires: ["alpha_beta"],
     params: [
       { key: "minDepth", label: "From depth", rust: "ASP_MIN_DEPTH", type: "i32", default: 4, min: 1, max: 64 },
       { key: "delta", label: "Window (cp)", rust: "ASP_DELTA", type: "i32", default: 25, min: 1, max: 500 },
@@ -128,6 +138,7 @@ export const SEARCH_BLOCKS: Record<SearchBlockType, SearchBlockSpec> = {
     slot: "pruning",
     info: "Also called static null move pruning. Near the leaves, if the static evaluation minus a margin that grows with depth is still at least beta, the side to move is so far ahead that a full search would almost surely fail high too, so the node returns right away.",
     cpw: "https://www.chessprogramming.org/Reverse_Futility_Pruning",
+    requires: ["alpha_beta"],
     params: [
       { key: "maxDepth", label: "Up to depth", rust: "RFP_MAX_DEPTH", type: "i32", default: 6, min: 1, max: 32 },
       { key: "margin", label: "Margin per depth (cp)", rust: "RFP_MARGIN", type: "i32", default: 80, min: 1, max: 1000 },
@@ -139,6 +150,7 @@ export const SEARCH_BLOCKS: Record<SearchBlockType, SearchBlockSpec> = {
     slot: "pruning",
     info: "The side to move passes (makes a null move) and the opponent gets a reduced-depth search. If our position is still at least beta after giving away a whole move, it is so strong that the real moves will fail high as well, so the node is cut. Skipped in check and without pieces, where passing would be illegal or zugzwang is likely.",
     cpw: "https://www.chessprogramming.org/Null_Move_Pruning",
+    requires: ["alpha_beta"],
     params: [
       { key: "minDepth", label: "From depth", rust: "NMP_MIN_DEPTH", type: "i32", default: 3, min: 1, max: 32 },
       { key: "baseReduction", label: "Base reduction", rust: "NMP_BASE_REDUCTION", type: "i32", default: 3, min: 1, max: 10 },
@@ -149,7 +161,7 @@ export const SEARCH_BLOCKS: Record<SearchBlockType, SearchBlockSpec> = {
     label: "TT move first",
     description: "Tries the best move stored in the transposition table first.",
     slot: "ordering",
-    requires: ["transposition_table"],
+    requires: ["alpha_beta", "transposition_table"],
     info: "Alpha-beta prunes most when the best move is searched first. The move stored in the transposition table was the best move last time this position was searched, so it is usually the best first try.",
     cpw: "https://www.chessprogramming.org/Hash_Move",
     params: [],
@@ -168,6 +180,7 @@ export const SEARCH_BLOCKS: Record<SearchBlockType, SearchBlockSpec> = {
     slot: "ordering",
     info: "A killer is a quiet move that caused a beta cutoff in another node at the same ply. Positions at the same depth are often similar, so that move is likely to refute this one too. Two killers are kept per ply and tried right after the captures.",
     cpw: "https://www.chessprogramming.org/Killer_Heuristic",
+    requires: ["alpha_beta"],
     params: [],
   },
   history: {
@@ -176,6 +189,7 @@ export const SEARCH_BLOCKS: Record<SearchBlockType, SearchBlockSpec> = {
     slot: "ordering",
     info: "A table scores every quiet move by side, from-square and to-square. When a quiet move causes a cutoff its score goes up by depth squared, and the quiet moves tried before it go down. Remaining quiet moves are tried in order of their score.",
     cpw: "https://www.chessprogramming.org/History_Heuristic",
+    requires: ["alpha_beta"],
     params: [
       { key: "bonusMax", label: "Max bonus", rust: "HISTORY_BONUS_MAX", type: "i32", default: 1200, min: 1, max: 16384 },
     ],
@@ -186,6 +200,7 @@ export const SEARCH_BLOCKS: Record<SearchBlockType, SearchBlockSpec> = {
     slot: "move_loop",
     info: "With good move ordering the first move is usually the best. The other moves are searched with a zero-width window just to prove they are worse, which is much cheaper. Only when a move turns out better is it searched again with the full window.",
     cpw: "https://www.chessprogramming.org/Principal_Variation_Search",
+    requires: ["alpha_beta"],
     params: [],
   },
   late_move_reductions: {
@@ -194,6 +209,7 @@ export const SEARCH_BLOCKS: Record<SearchBlockType, SearchBlockSpec> = {
     slot: "reductions",
     info: "Thanks to move ordering, moves late in the list rarely turn out best. Late quiet moves are searched at reduced depth (more reduction for deeper nodes and later moves). If a reduced search unexpectedly beats alpha, the move is searched again at full depth.",
     cpw: "https://www.chessprogramming.org/Late_Move_Reductions",
+    requires: ["alpha_beta"],
     params: [
       { key: "minDepth", label: "From depth", rust: "LMR_MIN_DEPTH", type: "i32", default: 3, min: 1, max: 32 },
       { key: "minMoves", label: "After move #", rust: "LMR_MIN_MOVES", type: "usize", default: 3, min: 1, max: 64 },
@@ -208,6 +224,7 @@ export const SEARCH_BLOCKS: Record<SearchBlockType, SearchBlockSpec> = {
     slot: "leaf",
     info: "Stopping the search at a fixed depth can evaluate in the middle of an exchange, for example right after QxP before PxQ (the horizon effect). Quiescence search keeps searching captures at the leaves until the position is quiet. The side to move may also stand pat on the static evaluation.",
     cpw: "https://www.chessprogramming.org/Quiescence_Search",
+    requires: ["alpha_beta"],
     params: [],
   },
 };

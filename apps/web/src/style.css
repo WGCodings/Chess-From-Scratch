@@ -325,12 +325,27 @@ select:focus-visible {
   border-left-color: var(--focus-bar);
 }
 
-.ln.removed-here {
-  box-shadow: inset 0 2px 0 rgba(229, 130, 110, 0.55);
+.ln.removed {
+  background: rgba(229, 130, 110, 0.08);
+  border-left-color: rgba(229, 130, 110, 0.4);
+  opacity: 0.75;
 }
 
-.ln.removed-here.current {
-  box-shadow: inset 0 2px 0 #e5826e;
+.ln.removed::before {
+  counter-increment: none;
+  content: "−";
+  color: #e5826e;
+  padding-right: 4px;
+}
+
+.ln.removed.current {
+  background: rgba(229, 130, 110, 0.2);
+  border-left-color: #e5826e;
+  opacity: 1;
+}
+
+.ln.changed::before {
+  content: "+ " counter(ln);
 }
 
 /* Tour ------------------------------------------------------------------ */

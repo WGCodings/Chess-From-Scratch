@@ -38,17 +38,33 @@ function highlightLine(line: string): string {
   return out + escape(line.slice(last));
 }
 
+/** Lines to show as removed (GitHub style) just above line `at`. */
+export interface Removed {
+  at: number;
+  lines: string[];
+  current: boolean;
+}
+
 /**
  * Highlighted HTML, one `<div class="ln">` per line. `extra[i]` adds classes
- * to line i (focus, tour highlights).
+ * to line i (focus, tour highlights); `removed` inserts unnumbered deleted
+ * lines above the line where they used to be.
  */
-export function renderCode(source: string, extra: string[] = []): string {
-  return source
-    .replace(/\n$/, "")
-    .split("\n")
-    .map((line, i) => {
-      const cls = extra[i] ? `ln ${extra[i]}` : "ln";
-      return `<div class="${cls}">${highlightLine(line) || " "}</div>`;
-    })
-    .join("");
+export function renderCode(source: string, extra: string[] = [], removed: Removed[] = []): string {
+  const src = source.replace(/\n$/, "").split("\n");
+  const before = new Map<number, string>();
+  for (const r of removed) {
+    const cls = r.current ? "ln removed current" : "ln removed";
+    const html = r.lines.map((l) => `<div class="${cls}">${highlightLine(l) || " "}</div>`).join("");
+    const at = Math.min(r.at, src.length);
+    before.set(at, (before.get(at) ?? "") + html);
+  }
+  return (
+    src
+      .map((line, i) => {
+        const cls = extra[i] ? `ln ${extra[i]}` : "ln";
+        return `${before.get(i) ?? ""}<div class="${cls}">${highlightLine(line) || " "}</div>`;
+      })
+      .join("") + (before.get(src.length) ?? "")
+  );
 }

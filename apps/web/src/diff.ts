@@ -11,6 +11,8 @@ export interface Hunk {
   end: number;
   /** Lines of the old file this hunk replaces. */
   removed: number;
+  /** The replaced lines themselves, shown like a GitHub diff. */
+  removedLines?: string[];
 }
 
 /** Hunks that turn `before` into `after` (both split into lines). */
@@ -60,6 +62,7 @@ export function diffLines(file: string, before: string[], after: string[]): Hunk
     } else {
       open ??= { file, start: pre + j, end: pre + j, removed: 0 };
       open.removed++;
+      (open.removedLines ??= []).push(a[i]!);
       i++;
     }
   }
@@ -107,4 +110,42 @@ export function lineRegions(lines: string[]): (string | null)[] {
     if (END.test(line)) region = null;
     return here;
   });
+}
+
+const MARKER_LINE = /^\s*\/\/ @(block|end|else)\b/;
+const COMMENT_LINE = /^\s*\/\//;
+
+/**
+ * Splits lines[start, end) into sections: a new section begins wherever a
+ * comment follows code or a blank line, so each section is one commented
+ * piece of code. Sections with nothing but markers, blanks and closing
+ * braces are dropped.
+ */
+export function splitSections(lines: string[], start: number, end: number): [number, number][] {
+  const commentish = (k: number) => COMMENT_LINE.test(lines[k] ?? "");
+  const starts = [start];
+  for (let k = start + 1; k < end; k++) {
+    if (commentish(k) && !commentish(k - 1)) starts.push(k);
+  }
+  const out: [number, number][] = [];
+  starts.forEach((s, i) => {
+    const e = starts[i + 1] ?? end;
+    const meaningful = lines
+      .slice(s, e)
+      .some((l) => l.trim() !== "" && !MARKER_LINE.test(l) && !/^[\s})\];,]*$/.test(l));
+    if (meaningful) out.push([s, e]);
+  });
+  return out;
+}
+
+/** A fallback explanation for a section without its own comment. */
+export function describeCode(lines: string[], start: number, end: number): string | null {
+  const first = lines.slice(start, end).find((l) => l.trim() !== "" && !MARKER_LINE.test(l))?.trim() ?? "";
+  if (first.startsWith("use ")) return "Imports: the other parts of the engine and of the chess library this code uses.";
+  if (first.startsWith("mod ")) return "Declares the files (modules) the engine is made of.";
+  if (first.startsWith("#![allow")) return "Tells the compiler not to warn about imports that some block combinations leave unused.";
+  if (first.startsWith("#[derive")) return "Lets Rust copy, compare and print this type automatically.";
+  if (/^(pub )?struct /.test(first)) return `Defines ${first.replace(/^(pub )?struct (\w+).*/, "$2")}, the data this part of the engine keeps.`;
+  if (/^impl /.test(first)) return `The functions that belong to ${first.replace(/^impl(<.*?>)? (\w+ for )?(\w+).*/, "$3")}.`;
+  return null;
 }

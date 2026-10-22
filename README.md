@@ -62,14 +62,18 @@ generator renders the Rust templates, keeping each placed block's region
 and writes `params.rs` from the block catalogue. The result is one flat Cargo
 crate (only `cozy-chess` as a dependency) that contains only the code the
 placed blocks need: no TT block means no `tt.rs`, an unplaced eval term
-leaves no trace. `// @block a|b` marks helpers shared by several blocks.
+leaves no trace. `// @block a|b` marks helpers shared by several blocks, and regions nest
+(PVS sits inside Alpha-beta). The generator also reports which block owns
+each line, which the editor uses for its explanations.
 The unit tests in the templates (`// @block tests`) are kept only in the
 reference crate.
 
 ## The editor
 
-Drag an Engine block, plug in a Negamax search and a Hand-crafted evaluation,
-then drop feature blocks into their slots. Blocks only fit where they belong
+Every engine starts bare bones: plain negamax (no pruning at all), basic time
+management and PeSTO tables. Every improvement is a block you add yourself,
+starting with Alpha-beta pruning, which most other search blocks build on.
+Drop feature blocks into the slots of the Negamax and Evaluation blocks. Blocks only fit where they belong
 (typed connections), each block appears once, and loose blocks are greyed out
 and ignored.
 
@@ -81,7 +85,9 @@ and ignored.
   Wiki link) and then walks through every place in every file that changed,
   each with a one-line reason taken from the code's own comments. Next/Back
   or the arrow keys step through it; Skip or Esc closes it. Right-click any
-  block and choose *Explain this block* to tour its code at any time.
+  block and choose *Explain this block* to walk through all of its code, part
+  by part. On the Engine, Negamax or Evaluation block this explains the
+  skeleton itself, every section of `main.rs`, `uci.rs`, `search.rs`, ...
 - **Time management**: an engine always has one. Without a time block it uses
   the Basic rule (time left / 40 + half the increment); the Soft/hard block
   adds a soft limit for iterations and a hard limit for the search.

@@ -14,7 +14,7 @@ import {
 } from "@cfs/codegen";
 import { COLOURS, ENGINE, defineBlocks, maxInstances, toolbox } from "./blocks";
 import { loadWorkspace, parseWorkspaceFile, readWorkspace } from "./convert";
-import { diffLines, explain, lineRegions, type Hunk } from "./diff";
+import { describeCode, diffLines, explain, lineRegions, splitSections, type Hunk } from "./diff";
 import { renderCode } from "./highlight";
 import { infoForBlockType, infoForKey, placedKeys, type BlockInfo } from "./info";
 import "./style.css";
@@ -92,6 +92,23 @@ let focusRegion: string | null = null;
 const collapsed = new Set<string>();
 
 const lines = (path: string) => files.find((f) => f.path === path)?.contents.replace(/\n$/, "").split("\n") ?? [];
+
+/** Which blocks own each line of a file ([] = skeleton); from the generator or from markers. */
+function ownersOf(path: string): string[][] {
+  const file = files.find((f) => f.path === path);
+  if (file?.owners) return file.owners;
+  return lineRegions(lines(path)).map((r) => (r ? [r] : []));
+}
+
+/** Splits [start, end) of a file into commented sections, as tour steps. */
+function sectionHunks(path: string, start: number, end: number, removed = 0, removedLines?: string[]): Hunk[] {
+  const parts = splitSections(lines(path), start, end);
+  // Nothing but markers, blanks and braces: not worth a step, unless code was removed there.
+  if (parts.length === 0) return removed > 0 ? [{ file: path, start, end, removed, removedLines }] : [];
+  return parts.map(([s, e], i) =>
+    i === 0 ? { file: path, start: s, end: e, removed, removedLines } : { file: path, start: s, end: e, removed: 0 },
+  );
+}
 
 function toast(message: string): void {
   toastEl.textContent = message;
@@ -206,11 +223,21 @@ function showFile(path: string, scrollTo?: number): void {
   activeFile = path;
   pathEl.textContent = path;
   const file = files.find((f) => f.path === path);
-  codeEl.innerHTML = file ? renderCode(file.contents, lineClasses(path)) : "";
+  // During a tour, removed lines are shown in red above the code that replaced them.
+  const removed = tour
+    ? tour.hunks.flatMap((h, k) =>
+        h.file === path && h.removedLines?.length ? [{ at: h.start, lines: h.removedLines, current: k === tour!.index }] : [],
+      )
+    : [];
+  codeEl.innerHTML = file ? renderCode(file.contents, lineClasses(path), removed) : "";
   renderTree();
   if (scrollTo !== undefined) {
-    const target = codeEl.children[Math.min(scrollTo, codeEl.children.length - 1)] as HTMLElement | undefined;
-    target?.scrollIntoView({ block: "center", behavior: "smooth" });
+    const rows = codeEl.querySelectorAll<HTMLElement>(".ln:not(.removed)");
+    const target = rows[Math.min(scrollTo, rows.length - 1)];
+    // Show the removed lines above the change too, when there are any.
+    let first: HTMLElement | undefined = target;
+    while (first?.previousElementSibling?.classList.contains("removed")) first = first.previousElementSibling as HTMLElement;
+    (first ?? target)?.scrollIntoView({ block: "center", behavior: "smooth" });
   }
 }
 
@@ -270,22 +297,22 @@ function endTour(message?: string): void {
 
 function hunkText(h: Hunk): string {
   const src = lines(h.file);
-  const own = explain(src, h.start, h.end);
+  const own = explain(src, h.start, h.end) ?? describeCode(src, h.start, h.end);
   if (own) return own;
   if (h.file === "src/params.rs") return "The block's parameters as constants. Change them to tune the engine.";
-  // Changes inside a region are explained by the comment at its top.
+  // Lines inside a region are explained by the comment at the top of that region.
   const regions = lineRegions(src);
-  const region = regions[h.start] ?? regions[Math.max(0, h.start - 1)];
+  const region = regions[h.start];
   if (region) {
-    const top = regions.indexOf(region);
+    let top = h.start;
+    while (top > 0 && regions[top - 1] === region && !/\/\/ @block /.test(src[top]!)) top--;
     const above = explain(src, top, h.start);
     const info = infoForKey(region);
     if (above) return above;
     if (info) return `Part of ${info.label}.`;
   }
-  if (h.file === "src/params.rs") return "The block's parameters as constants. Change them to tune the engine.";
   if (h.file === "src/main.rs") return "Registers the module so the rest of the engine can use it.";
-  return "Changed by this block.";
+  return tour && tour.mode === "explain" ? `Part of ${tour.title}.` : "Changed by this block.";
 }
 
 function renderTour(): void {
@@ -334,14 +361,15 @@ function renderTour(): void {
           : "No code changed."
         : t.mode === "added"
           ? `It changed ${t.hunks.length} ${t.hunks.length === 1 ? "place" : "places"} in ${fileCount} ${fileCount === 1 ? "file" : "files"}.`
-          : `Its code is in ${t.hunks.length} ${t.hunks.length === 1 ? "place" : "places"} in ${fileCount} ${fileCount === 1 ? "file" : "files"}.`;
+          : `Its code has ${t.hunks.length} ${t.hunks.length === 1 ? "part" : "parts"} in ${fileCount} ${fileCount === 1 ? "file" : "files"}. Each is explained in turn.`;
     card.append(el("p", "tour-step", summary));
     if (t.hunks.length) btn("Walk through the code", "primary", () => go(0));
     btn(t.hunks.length ? "Skip" : "Close", "", () => endTour());
   } else {
     const h = t.hunks[t.index]!;
     const where = el("p", "tour-step");
-    where.append(`Change ${t.index + 1} of ${t.hunks.length} · `, el("code", undefined, `${h.file}:${h.start + 1}`));
+    const noun = t.mode === "added" ? "Change" : "Part";
+    where.append(`${noun} ${t.index + 1} of ${t.hunks.length} · `, el("code", undefined, `${h.file}:${h.start + 1}`));
     card.append(where);
     card.append(el("p", "tour-why", hunkText(h)));
     if (h.removed > 0) {
@@ -350,8 +378,8 @@ function renderTour(): void {
           "p",
           "tour-note",
           h.end > h.start
-            ? `Replaces ${h.removed} old ${h.removed === 1 ? "line" : "lines"}.`
-            : `${h.removed} ${h.removed === 1 ? "line was" : "lines were"} removed here.`,
+            ? `Replaces ${h.removed} old ${h.removed === 1 ? "line" : "lines"}, shown in red above it.`
+            : `${h.removed} ${h.removed === 1 ? "line was" : "lines were"} removed here, shown in red.`,
         ),
       );
     }
@@ -387,25 +415,46 @@ document.addEventListener("keydown", (e) => {
   e.preventDefault();
 });
 
-/** Tour of a block's current code (right-click > Explain this block). */
+/** Files whose skeleton code a skeleton block explains. */
+const SKELETON_FILES: Record<string, string[]> = {
+  negamax: ["src/search.rs"],
+  hce: ["src/eval.rs"],
+  engine: ["src/main.rs", "src/uci.rs", "src/position.rs", "src/time.rs", "src/moves.rs", "src/score.rs", "src/bench.rs"],
+};
+
+/** Tour of a block's current code, section by section (right-click > Explain this block). */
 function explainBlock(block: Blockly.Block): void {
   const info = infoForBlockType(block.type);
   if (!info) return;
+  const skeleton = SKELETON_FILES[info.key];
+  // Skeleton blocks own the lines no feature block claims; fallback lines of a
+  // missing block (`!x`) are skeleton too. Basic time also owns the fallback of
+  // the soft/hard block.
+  // The innermost region decides: code of a block nested in another belongs to the inner one.
+  const mine = (owners: string[]) => {
+    const inner = owners.filter((o) => !o.startsWith("!")).at(-1);
+    if (skeleton) return inner === undefined;
+    if (inner?.split("|").includes(info.key)) return true;
+    return info.key === "basic_time" && inner === undefined && owners.includes("!time_management");
+  };
   const hunks: Hunk[] = [];
-  for (const f of files) {
-    const regions = lineRegions(lines(f.path));
+  for (const path of skeleton ?? files.map((f) => f.path)) {
+    if (path === "workspace.json") continue;
+    const owners = ownersOf(path);
     let start = -1;
-    regions.forEach((r, i) => {
-      if (r === info.key && start < 0) start = i;
-      if (r !== info.key && start >= 0) {
-        hunks.push({ file: f.path, start, end: i, removed: 0 });
+    owners.forEach((o, i) => {
+      if (mine(o) && start < 0) start = i;
+      if (!mine(o) && start >= 0) {
+        hunks.push(...sectionHunks(path, start, i));
         start = -1;
       }
     });
-    if (start >= 0) hunks.push({ file: f.path, start, end: regions.length, removed: 0 });
+    if (start >= 0) hunks.push(...sectionHunks(path, start, owners.length));
   }
   const attached = block.isEnabled() && block.getRootBlock().type === ENGINE;
-  startTour({ title: info.label, blocks: [info], hunks: attached ? sortHunks(hunks) : [], mode: "explain" });
+  // Skeleton tours follow the files in reading order; block tours start with your engine files.
+  const ordered = skeleton ? hunks.filter((h) => h.file !== "workspace.json") : sortHunks(hunks);
+  startTour({ title: info.label, blocks: [info], hunks: attached ? ordered : [], mode: "explain" });
 }
 
 // Status and regeneration ---------------------------------------------------
@@ -450,7 +499,9 @@ function refresh(): void {
 
     if (!suppressTour && added.length > 0) {
       const old = new Map(before.map((f) => [f.path, f.contents.replace(/\n$/, "").split("\n")]));
-      const hunks = files.flatMap((f) => diffLines(f.path, old.get(f.path) ?? [], f.contents.replace(/\n$/, "").split("\n")));
+      const hunks = files
+        .flatMap((f) => diffLines(f.path, old.get(f.path) ?? [], f.contents.replace(/\n$/, "").split("\n")))
+        .flatMap((h) => (h.end > h.start ? sectionHunks(h.file, h.start, h.end, h.removed, h.removedLines) : [h]));
       const title = added.length === 1 ? `${added[0]!.label} added` : `${added.length} blocks added`;
       startTour({ title, blocks: added, hunks: sortHunks(hunks), mode: "added" });
       return;

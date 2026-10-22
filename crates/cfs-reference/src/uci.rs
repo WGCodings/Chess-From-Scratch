@@ -53,6 +53,7 @@ const STARTPOS: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1
 
 /// Runs the UCI loop until `quit` or end of input.
 pub fn run<E: Engine>() {
+    // The engine lives on the search thread while it thinks; `stop` asks it to finish.
     let stop = Arc::new(AtomicBool::new(false));
     let mut engine = Some(E::new());
     let mut thread: Option<JoinHandle<E>> = None;
@@ -64,6 +65,7 @@ pub fn run<E: Engine>() {
         }
     };
 
+    // Read commands from the GUI, one line at a time.
     for line in io::stdin().lock().lines() {
         let Ok(line) = line else { break };
         let tokens: Vec<&str> = line.split_whitespace().collect();
@@ -72,6 +74,7 @@ pub fn run<E: Engine>() {
         };
 
         match command {
+            // Introduce the engine and its options.
             "uci" => {
                 println!("id name {}", E::NAME);
                 println!("id author {}", E::AUTHOR);
@@ -85,7 +88,9 @@ pub fn run<E: Engine>() {
                 println!("option name Threads type spin default 1 min 1 max 1");
                 println!("uciok");
             }
+            // The GUI checks we are alive: answer at once, even while searching.
             "isready" => println!("readyok"),
+            // A new game starts: forget what was learned.
             "ucinewgame" => {
                 wait(&mut thread, &mut engine);
                 engine.as_mut().unwrap().new_game();
@@ -97,6 +102,7 @@ pub fn run<E: Engine>() {
                 set_option::<E>(engine.as_mut().unwrap(), &tokens);
             }
             // @end transposition_table
+            // The position to search: the start position or a FEN, plus the moves played.
             "position" => {
                 wait(&mut thread, &mut engine);
                 match parse_position(&tokens) {
@@ -104,6 +110,8 @@ pub fn run<E: Engine>() {
                     None => println!("info string invalid position command"),
                 }
             }
+            // Search the position (or count moves with `go perft`). The search runs on its own
+            // thread and prints `bestmove` when it is done.
             "go" => {
                 wait(&mut thread, &mut engine);
                 if tokens.get(1) == Some(&"perft") {
@@ -127,15 +135,18 @@ pub fn run<E: Engine>() {
                     e
                 }));
             }
+            // Stop searching now; the search still prints its best move.
             "stop" => {
                 stop.store(true, Ordering::Relaxed);
                 wait(&mut thread, &mut engine);
             }
+            // Stop everything and exit.
             "quit" => {
                 stop.store(true, Ordering::Relaxed);
                 wait(&mut thread, &mut engine);
                 return;
             }
+            // Extras for engine developers: `bench`, and `d` to print the board.
             "bench" => {
                 wait(&mut thread, &mut engine);
                 let depth = tokens.get(1).and_then(|d| d.parse().ok());
@@ -151,8 +162,9 @@ pub fn run<E: Engine>() {
 }
 
 // @block transposition_table
+/// Handles `setoption name <name...> value <value...>`. The only option is Hash, the size of
+/// the transposition table in MB.
 fn set_option<E: Engine>(engine: &mut E, tokens: &[&str]) {
-    // setoption name <name...> value <value...>
     let name_at = tokens.iter().position(|&t| t == "name");
     let value_at = tokens.iter().position(|&t| t == "value");
     let (Some(n), Some(v)) = (name_at, value_at) else {

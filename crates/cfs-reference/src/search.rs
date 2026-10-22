@@ -1,34 +1,41 @@
 //! Negamax search skeleton. Each placed block sits between
 //! `// @block <name>` and `// @end <name>` markers.
 
-#![allow(unused_imports, unused_mut, unused_variables, unused_assignments)]
+// Some imports are only used by some blocks; don't warn about the others.
+#![allow(unused_imports)]
 
+// Imports: the stop flag shared with the UCI thread, the chess library and the other parts of
+// the engine.
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use cozy_chess::{Board, Color, Move, Piece};
 
 use crate::eval::evaluate;
-use crate::moves::{is_capture, is_quiet, MoveList, PvTable};
+use crate::moves::{MoveList, PvTable};
 use crate::params::*;
 use crate::position::Position;
 use crate::score::{print_info, IterationInfo, INF, MATE, MATE_BOUND, MAX_PLY};
 use crate::time::TimeManager;
 use crate::uci::{Engine, SearchResult};
 
+use crate::moves::is_capture;
+use crate::moves::is_quiet;
+
 // @block transposition_table
 // The transposition table stores results of positions searched before.
 use crate::tt::{score_from_tt, score_to_tt, Bound, TranspositionTable};
 // @end transposition_table
 
+/// Everything the search keeps: counters, the clock, the stop flag and the best line.
 pub struct Searcher {
-    nodes: u64,
-    seldepth: usize,
-    stopped: bool,
-    can_stop: bool,
-    stop: Arc<AtomicBool>,
-    tm: TimeManager,
-    pv: PvTable,
+    nodes: u64,            // positions visited in this search
+    seldepth: usize,       // deepest ply reached, reported to the GUI
+    stopped: bool,         // set when time is up; the search then unwinds
+    can_stop: bool,        // false until depth 1 is finished, so there is always a move
+    stop: Arc<AtomicBool>, // set by the UCI thread on `stop`
+    tm: TimeManager,       // decides when time is up
+    pv: PvTable,           // the principal variation: the best line found
     // @block transposition_table
     // Remembers search results by position hash, shared across iterations.
     tt: TranspositionTable,
@@ -47,6 +54,7 @@ pub struct Searcher {
     // @end late_move_reductions
 }
 
+// The interface the UCI loop talks to: name, author, setup and searching.
 impl Engine for Searcher {
     const NAME: &'static str = ENGINE_NAME;
     const AUTHOR: &'static str = ENGINE_AUTHOR;
@@ -56,6 +64,7 @@ impl Engine for Searcher {
     const DEFAULT_HASH_MB: usize = TT_HASH_MB;
     // @end transposition_table
 
+    /// Creates the searcher once, when the engine starts.
     fn new() -> Self {
         Self {
             nodes: 0,
@@ -84,6 +93,7 @@ impl Engine for Searcher {
         }
     }
 
+    /// Called on `ucinewgame`: forget what was learned in the previous game.
     fn new_game(&mut self) {
         // @block transposition_table
         // A new game: old positions are no longer useful.
@@ -106,7 +116,8 @@ impl Engine for Searcher {
     }
     // @end transposition_table
 
-    /// Iterative deepening: search depth 1, 2, 3, ... until time runs out.
+    /// Called by the UCI loop on `go`: searches until time or depth runs out and returns the
+    /// best move.
     fn search(
         &mut self,
         pos: &Position,
@@ -114,6 +125,7 @@ impl Engine for Searcher {
         stop: Arc<AtomicBool>,
         verbose: bool,
     ) -> SearchResult {
+        // Reset the counters and take over the clock and stop flag for this search.
         self.nodes = 0;
         self.stopped = false;
         self.can_stop = false;
@@ -124,21 +136,31 @@ impl Engine for Searcher {
         self.killers.clear();
         // @end killers
 
+        // Work on our own copy of the position; no best move yet.
         let mut pos = pos.clone();
         let mut best_move = None;
+        // @block aspiration_windows
+        // The last finished iteration's score: the centre of the next aspiration window.
         let mut score = 0;
+        // @end aspiration_windows
 
+        // Iterative deepening: search depth 1, 2, 3, ... and keep the last finished result.
         for depth in 1..=self.tm.max_depth {
             self.seldepth = 0;
+            // @block aspiration_windows
             let new_score = self.search_root(&mut pos, depth, score);
             if self.stopped {
                 break;
             }
             score = new_score;
+            // @end aspiration_windows
+            // The finished iteration's best line; its first move is our best move. From now on
+            // the search may be stopped at any time.
             let line = self.pv.root_line();
             best_move = line.first().copied().or(best_move);
             self.can_stop = true;
 
+            // Tell the GUI what we found: depth, score, nodes, speed and the best line.
             if verbose {
                 print_info(
                     pos.board(),
@@ -153,11 +175,13 @@ impl Engine for Searcher {
                     },
                 );
             }
+            // Not enough time left for another, deeper iteration?
             if self.tm.soft_stop(self.nodes) {
                 break;
             }
         }
 
+        // Hand the best move back to the UCI loop, which prints `bestmove`.
         SearchResult {
             best_move,
             nodes: self.nodes,
@@ -165,7 +189,9 @@ impl Engine for Searcher {
     }
 }
 
+// The search itself.
 impl Searcher {
+    /// How full the hash table is, for the GUI's info line (always 0 without one).
     fn hashfull(&self) -> usize {
         // @block transposition_table
         // How full the table is, reported to the GUI in permille.
@@ -184,7 +210,10 @@ impl Searcher {
         }
     }
 
+    /// Searches the current position to `depth` and returns its score.
+    // @block aspiration_windows
     fn search_root(&mut self, pos: &mut Position, depth: i32, prev_score: i32) -> i32 {
+        // @end aspiration_windows
         // @block aspiration_windows
         // Search with a narrow window around the last score; most iterations land inside it,
         // which is cheaper.
@@ -208,9 +237,16 @@ impl Searcher {
             }
         }
         // @end aspiration_windows
+        // @block alpha_beta
+        // The root starts with the widest window: every score is still possible.
         self.negamax(pos, depth, 0, -INF, INF)
+        // @end alpha_beta
     }
 
+    // @block alpha_beta
+    /// Negamax with alpha-beta pruning. Returns the score of `pos` for the side to move, but
+    /// only exactly when it lies between alpha (what we can already reach) and beta (what the
+    /// opponent will allow); outside that window a bound is good enough.
     fn negamax(
         &mut self,
         pos: &mut Position,
@@ -219,9 +255,13 @@ impl Searcher {
         mut alpha: i32,
         beta: i32,
     ) -> i32 {
+        // @end alpha_beta
+        // A PV node has an open window, so its exact score matters: prune it less.
         let pv_node = beta - alpha > 1;
+        // Forget the PV below this node; it is rebuilt from the moves searched here.
         self.pv.clear(ply);
 
+        // At the horizon, stop searching and score the position.
         if depth <= 0 {
             // @block quiescence
             // At depth 0 keep searching captures so we never evaluate in the middle of an
@@ -230,12 +270,14 @@ impl Searcher {
             // @end quiescence
         }
 
+        // Count the node and stop when time is up (the result is then thrown away).
         self.nodes += 1;
         self.check_stop();
         if self.stopped {
             return 0;
         }
         self.seldepth = self.seldepth.max(ply);
+        // Repetitions and the fifty-move rule are draws.
         if ply > 0 && pos.is_draw() {
             return 0;
         }
@@ -246,13 +288,19 @@ impl Searcher {
         let board = pos.board().clone();
         let stm = board.side_to_move();
         let in_check = !board.checkers().is_empty();
-        let mut tt_move: Option<Move> = None;
 
         // @block transposition_table
         // Seen this position before at enough depth? Reuse that result, and remember its best
         // move.
+        // @block tt_move_ordering
+        let mut tt_move = None;
+        // @end tt_move_ordering
+        // Look the position up by its hash.
         if let Some(entry) = self.tt.probe(board.hash()) {
+            // @block tt_move_ordering
             tt_move = entry.mv();
+            // @end tt_move_ordering
+            // Searched deep enough before, and the stored bound settles this window: done.
             let tt_score = score_from_tt(entry.score, ply);
             if !pv_node && entry.depth as i32 >= depth && entry.cuts(tt_score, alpha, beta) {
                 return tt_score;
@@ -260,6 +308,7 @@ impl Searcher {
         }
         // @end transposition_table
 
+        // The static evaluation guides the pruning decisions below.
         let static_eval = if in_check { -INF } else { evaluate(&board) };
 
         // @block reverse_futility_pruning
@@ -296,11 +345,13 @@ impl Searcher {
         }
         // @end null_move_pruning
 
+        // No legal moves: checkmate (bad, sooner is worse) or stalemate (a draw).
         let mut moves = MoveList::all(&board);
         if moves.is_empty() {
             return if in_check { -MATE + ply as i32 } else { 0 };
         }
 
+        // Give every move an ordering score; the loop below tries the highest scores first.
         for i in 0..moves.len() {
             let mv = moves.get(i);
             let mut order = 0;
@@ -336,24 +387,33 @@ impl Searcher {
             moves.set_score(i, order);
         }
 
+        // @block transposition_table
+        // Remember the window we started with, to know what kind of score we store.
         let original_alpha = alpha;
-        let mut best_score = -INF;
         let mut best_move = None;
+        // @end transposition_table
+        // @block history
+        // Quiet moves searched so far: punished if a later quiet move causes the cutoff.
         let mut quiets_tried = MoveList::new();
+        // @end history
+        let mut best_score = -INF;
 
+        // Try every move: play it, search the reply, take it back.
         for i in 0..moves.len() {
             let mv = moves.pick(i);
             let quiet = is_quiet(&board, mv);
             pos.make_move(mv);
             let new_depth = depth - 1;
-            let mut score;
 
+            // @block alpha_beta
+            let mut score;
             if i == 0 {
+                // The first move is searched with the full window.
                 score = -self.negamax(pos, new_depth, ply + 1, -beta, -alpha);
             } else {
-                let mut r = 0;
                 // @block late_move_reductions
                 // Late quiet moves rarely matter: search them at reduced depth.
+                let mut r = 0;
                 let min_moves = if pv_node {
                     LMR_MIN_MOVES_PV
                 } else {
@@ -367,27 +427,39 @@ impl Searcher {
                 // @block principal_variation_search
                 // After the first move, prove a move is no better with a cheap zero-window
                 // search; re-search only if it is.
+                // @block late_move_reductions
                 score = -self.negamax(pos, new_depth - r, ply + 1, -alpha - 1, -alpha);
                 if score > alpha && r > 0 {
                     score = -self.negamax(pos, new_depth, ply + 1, -alpha - 1, -alpha);
                 }
+                // @end late_move_reductions
                 if score > alpha && score < beta {
                     score = -self.negamax(pos, new_depth, ply + 1, -beta, -alpha);
                 }
                 // @end principal_variation_search
             }
+            // @end alpha_beta
             pos.unmake();
 
             if self.stopped {
                 return 0;
             }
 
+            // A new best move: remember it and its line.
             if score > best_score {
                 best_score = score;
+                // @block alpha_beta
+                // Better than anything found so far: raise alpha.
                 if score > alpha {
                     alpha = score;
+                    // @block transposition_table
+                    // Remember the best move, to store it in the transposition table.
                     best_move = Some(mv);
+                    // @end transposition_table
+                    // The best line now starts with this move.
                     self.pv.update(ply, mv);
+                    // Beta cutoff: the opponent will never allow this position, so the
+                    // remaining moves do not matter.
                     if score >= beta {
                         // @block killers
                         // Remember this quiet move as a killer for this ply.
@@ -406,13 +478,17 @@ impl Searcher {
                             }
                         }
                         // @end history
+                        // Skip the remaining moves.
                         break;
                     }
                 }
+                // @end alpha_beta
             }
+            // @block history
             if quiet {
                 quiets_tried.push(mv);
             }
+            // @end history
         }
 
         // @block transposition_table

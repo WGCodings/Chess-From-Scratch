@@ -1,8 +1,12 @@
 //! Transposition table (the "Transposition table" block).
 
-use cozy_chess::{Move, Piece, Square};
+use cozy_chess::Move;
 
 use crate::score::MATE_BOUND;
+
+// @block tt_move_ordering
+use cozy_chess::{Piece, Square};
+// @end tt_move_ordering
 
 /// What a stored score says about the true score.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -30,10 +34,12 @@ pub struct TtEntry {
 }
 
 impl TtEntry {
+    // @block tt_move_ordering
     /// The best move found, if any.
     pub fn mv(&self) -> Option<Move> {
         unpack_move(self.mv)
     }
+    // @end tt_move_ordering
 
     /// True when the stored bound proves a cutoff for this window.
     pub fn cuts(&self, score: i32, alpha: i32, beta: i32) -> bool {
@@ -145,6 +151,7 @@ fn pack_move(mv: Move) -> u16 {
     mv.from as u16 | (mv.to as u16) << 6 | promo << 12
 }
 
+// @block tt_move_ordering
 fn unpack_move(packed: u16) -> Option<Move> {
     if packed == 0 {
         return None;
@@ -156,6 +163,7 @@ fn unpack_move(packed: u16) -> Option<Move> {
         promotion: (promo > 0).then(|| Piece::index(promo - 1)),
     })
 }
+// @end tt_move_ordering
 
 // @block tests
 #[cfg(test)]

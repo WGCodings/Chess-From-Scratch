@@ -1,13 +1,16 @@
 //! Move lists, capture detection and the principal-variation table.
 
-use cozy_chess::{Board, Move, Piece, Square};
+use cozy_chess::{Board, Move, Square};
 
 use crate::score::MAX_PLY;
+
+use cozy_chess::Piece;
 
 /// Maximum number of legal moves in any chess position.
 pub const MAX_MOVES: usize = 218;
 
-/// A fixed-capacity list of moves with an ordering score per move.
+/// A fixed-capacity list of legal moves (with an ordering score per move when moves are
+/// ordered).
 pub struct MoveList {
     moves: [Move; MAX_MOVES],
     scores: [i32; MAX_MOVES],

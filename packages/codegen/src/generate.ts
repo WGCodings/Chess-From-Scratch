@@ -13,7 +13,7 @@ import {
   type Score,
 } from "./blocks";
 import { TEMPLATES } from "./embedded.generated";
-import { renderTemplate } from "./template";
+import { renderTemplateWithOwners } from "./template";
 import {
   KNOWN_REGIONS,
   enabledRegions,
@@ -26,6 +26,8 @@ import {
 export interface GeneratedFile {
   path: string;
   contents: string;
+  /** Rust templates only: for each line, the blocks whose code it is (empty = skeleton). */
+  owners?: string[][];
 }
 
 export class GenerateError extends Error {
@@ -173,8 +175,10 @@ export function generateMain(ws: Workspace): string {
     "//   bench.rs     the `bench` command",
     ...(ws.engine.transpositionTable ? ["//   tt.rs        the transposition table"] : []),
     "",
+    "// The files (modules) the engine is made of.",
     ...modules.map((m) => `mod ${m};`),
     "",
+    "// Start: run `bench` when asked on the command line (OpenBench does this), otherwise talk UCI.",
     "fn main() {",
     "    let args: Vec<String> = std::env::args().skip(1).collect();",
     '    if args.first().map(String::as_str) == Some("bench") {',
@@ -288,8 +292,10 @@ export function generateProject(ws: Workspace, options: GenerateOptions = {}): G
   if (errors.length > 0) throw new GenerateError(errors);
 
   const enabled = enabledRegions(ws, options.includeTests);
-  const render = (name: keyof typeof TEMPLATES) =>
-    renderTemplate(TEMPLATES[name], enabled, KNOWN_REGIONS, `${name}.rs`);
+  const render = (name: keyof typeof TEMPLATES): GeneratedFile => {
+    const r = renderTemplateWithOwners(TEMPLATES[name], enabled, KNOWN_REGIONS, `${name}.rs`);
+    return { path: `src/${name}.rs`, contents: r.text, owners: r.owners };
+  };
 
   return [
     { path: "Cargo.toml", contents: generateCargoToml(ws) },
@@ -299,6 +305,6 @@ export function generateProject(ws: Workspace, options: GenerateOptions = {}): G
     { path: "workspace.json", contents: `${JSON.stringify(ws, null, 2)}\n` },
     { path: "src/main.rs", contents: generateMain(ws) },
     { path: "src/params.rs", contents: generateParams(ws) },
-    ...templateFiles(ws).map((name) => ({ path: `src/${name}.rs`, contents: render(name) })),
+    ...templateFiles(ws).map(render),
   ];
 }

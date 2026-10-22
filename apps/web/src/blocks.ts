@@ -227,7 +227,11 @@ export function defineBlocks(): void {
         previousStatement: `slot_${spec.slot}`,
         nextStatement: `slot_${spec.slot}`,
         colour: COLOURS[spec.slot],
-        tooltip: spec.description + (spec.requires ? " Needs a Transposition table." : ""),
+        tooltip:
+          spec.description +
+          (spec.requires
+            ? ` Needs ${spec.requires.map((r) => (r === "transposition_table" ? "a Transposition table" : SEARCH_BLOCKS[r].label)).join(" and ")}.`
+            : ""),
       }),
     );
   }

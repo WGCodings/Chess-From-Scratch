@@ -95,14 +95,18 @@ export function referenceWorkspace(): Workspace {
   return ws;
 }
 
-/** A sensible starting point for beginners: PeSTO eval and a few safe blocks. */
+/** Bench depth that keeps plain negamax (no alpha-beta) quick. */
+export const BARE_BENCH_DEPTH = 3;
+
+/**
+ * The starting point for beginners: bare bones. Plain negamax, basic time
+ * management and PeSTO tables, so the engine plays legal, sensible chess and
+ * every improvement is a block you add yourself.
+ */
 export function starterWorkspace(): Workspace {
   const ws = emptyWorkspace();
+  ws.engine.benchDepth = BARE_BENCH_DEPTH;
   ws.engine.timeManagement = timeBlock("basic_time");
-  ws.engine.transpositionTable = defaultParams(TRANSPOSITION_TABLE.params);
-  for (const type of ["tt_move_ordering", "mvv_lva", "quiescence"] as const) {
-    ws.search.slots[SEARCH_BLOCKS[type].slot].push(searchBlock(type));
-  }
   ws.eval.terms = [evalTerm("pesto")];
   return ws;
 }
@@ -191,11 +195,22 @@ export function validate(ws: Workspace): Issue[] {
         issues.push({ level: "error", message: `${spec.label} is placed more than once.` });
       }
       seen.add(block.type);
-      if (spec.requires?.includes("transposition_table") && !ws.engine.transpositionTable) {
-        issues.push({ level: "error", message: `${spec.label} needs a Transposition table block.` });
-      }
       checkParams(spec.label, spec.params, block.params, issues);
     }
+  }
+  const placed = new Set(seen);
+  if (ws.engine.transpositionTable) placed.add("transposition_table");
+  for (const type of seen) {
+    const spec = SEARCH_BLOCKS[type as SearchBlockType];
+    for (const need of spec?.requires ?? []) {
+      if (!placed.has(need)) {
+        const label = need === "transposition_table" ? TRANSPOSITION_TABLE.label : SEARCH_BLOCKS[need].label;
+        issues.push({ level: "error", message: `${spec!.label} needs ${label}.` });
+      }
+    }
+  }
+  if (ws.engine.transpositionTable && !seen.has("alpha_beta")) {
+    issues.push({ level: "error", message: "Transposition table needs Alpha-beta pruning." });
   }
 
   const seenTerms = new Set<string>();
@@ -223,7 +238,18 @@ export function validate(ws: Workspace): Issue[] {
       message: "Without PeSTO tables the engine does not know piece values.",
     });
   }
-  if (!seen.has("quiescence")) {
+  if (!seen.has("alpha_beta")) {
+    issues.push({
+      level: "warning",
+      message: "Plain negamax searches every move. Add Alpha-beta pruning to search much deeper in the same time.",
+    });
+    if (ws.engine.benchDepth > BARE_BENCH_DEPTH) {
+      issues.push({
+        level: "warning",
+        message: `Without alpha-beta pruning, bench depth above ${BARE_BENCH_DEPTH} can take minutes.`,
+      });
+    }
+  } else if (!seen.has("quiescence")) {
     issues.push({
       level: "warning",
       message: "Without quiescence search the engine evaluates in the middle of captures.",

@@ -13,6 +13,7 @@ import {
   generateProject,
   referenceWorkspace,
   renderTemplate,
+  renderTemplateWithOwners,
   starterWorkspace,
   toCrateName,
   validate,
@@ -49,6 +50,16 @@ describe("renderTemplate", () => {
     expect(renderTemplate(s, new Set(["b"]), known)).toBe("x\n");
     expect(renderTemplate(s, new Set(), known)).toBe("\n");
   });
+  it("nests regions and records which block owns each line", () => {
+    const s = ["// @block a", "x", "// @block b", "y", "// @else", "z", "// @end b", "// @end a", "w", ""].join("\n");
+    expect(renderTemplate(s, new Set(["a"]), known)).toBe(["// @block a", "x", "z", "// @end a", "w", ""].join("\n"));
+    expect(renderTemplate(s, new Set(["b"]), known)).toBe("w\n");
+    const r = renderTemplateWithOwners(s, new Set(["a", "b"]), known);
+    expect(r.owners).toEqual([["a"], ["a"], ["a", "b"], ["a", "b"], ["a", "b"], ["a"], []]);
+    const shared = renderTemplateWithOwners("// @block a|b\nx\n// @end a|b\n", new Set(["b"]), known);
+    expect(shared.owners).toEqual([["a|b"]]);
+    expect(renderTemplateWithOwners(s, new Set(["a"]), known).owners).toEqual([["a"], ["a"], ["a", "!b"], ["a"], []]);
+  });
   it("collapses blank lines left by removed regions", () => {
     const s = ["x", "", "// @block b", "z", "// @end b", "", "y"].join("\n");
     expect(renderTemplate(s, new Set(), known)).toBe("x\n\ny\n");
@@ -69,7 +80,7 @@ describe("validate", () => {
   it("requires a TT for TT move ordering", () => {
     const ws = referenceWorkspace();
     ws.engine.transpositionTable = null;
-    expect(validate(ws).some((i) => i.message.includes("needs a Transposition table"))).toBe(true);
+    expect(validate(ws).map((i) => i.message)).toContain("TT move first needs Transposition table.");
   });
   it("rejects blocks in the wrong slot and duplicates", () => {
     const ws = referenceWorkspace();
@@ -138,16 +149,37 @@ describe("generateProject", () => {
   });
 
   it("drops disabled blocks and their parameters", () => {
-    const files = generateProject(starterWorkspace());
-    const search = files.find((f) => f.path === "src/search.rs")!.contents;
+    const ws = referenceWorkspace();
+    ws.search.slots.pruning = ws.search.slots.pruning.filter((b) => b.type !== "null_move_pruning");
+    const search = generateProject(ws).find((f) => f.path === "src/search.rs")!.contents;
     expect(search).not.toContain("@block null_move_pruning");
     expect(search).toContain("@block quiescence");
-    expect(generateParams(starterWorkspace())).not.toContain("NMP_");
+    expect(generateParams(ws)).not.toContain("NMP_");
+  });
+
+  it("starts bare bones: plain negamax without leftover helpers", () => {
+    const files = generateProject(starterWorkspace());
+    const search = files.find((f) => f.path === "src/search.rs")!.contents;
+    const moves = files.find((f) => f.path === "src/moves.rs")!.contents;
+    expect(search).toContain("fn negamax(&mut self, pos: &mut Position, depth: i32, ply: usize) -> i32 {");
+    for (const gone of ["alpha", "beta", "quiets_tried", "pv_node", "static_eval", "let quiet", "moves.pick", "set_score", "best_move = Some"]) {
+      expect(search, gone).not.toContain(gone);
+    }
+    expect(moves).not.toContain("scores");
+    expect(moves).not.toContain("fn is_quiet");
+  });
+
+  it("requires alpha-beta for the blocks that build on it", () => {
+    const ws = starterWorkspace();
+    ws.search.slots.leaf.push({ type: "quiescence", params: {} });
+    expect(validate(ws).map((i) => i.message)).toContain("Quiescence search needs Alpha-beta pruning.");
+    ws.engine.transpositionTable = { hashMb: 16 };
+    expect(validate(ws).map((i) => i.message)).toContain("Transposition table needs Alpha-beta pruning.");
   });
 
   it("emits the non-PVS fallback when PVS is not placed", () => {
     const ws = referenceWorkspace();
-    ws.search.slots.move_loop = [];
+    ws.search.slots.move_loop = ws.search.slots.move_loop.filter((b) => b.type !== "principal_variation_search");
     const search = generateProject(ws).find((f) => f.path === "src/search.rs")!.contents;
     expect(search).not.toContain("-alpha - 1");
   });
