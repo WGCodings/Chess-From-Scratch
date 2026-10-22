@@ -29,12 +29,13 @@ export interface ParamSpec {
 }
 
 /** Places a block can go in the negamax skeleton. */
-export type SearchSlot = "root" | "pruning" | "ordering" | "move_loop" | "reductions" | "leaf";
+export type SearchSlot = "root" | "pruning" | "ordering" | "extensions" | "move_loop" | "reductions" | "leaf";
 
 export const SEARCH_SLOTS: readonly SearchSlot[] = [
   "root",
   "pruning",
   "ordering",
+  "extensions",
   "move_loop",
   "reductions",
   "leaf",
@@ -323,4 +324,14 @@ export function defaultParams(params: ParamSpec[]): Record<string, ParamValue> {
   const out: Record<string, ParamValue> = {};
   for (const p of params) out[p.key] = structuredClone(p.default);
   return out;
+}
+
+/** The catalogue entry of a built-in search block, or undefined (custom blocks). */
+export function searchSpec(type: string): SearchBlockSpec | undefined {
+  return Object.hasOwn(SEARCH_BLOCKS, type) ? SEARCH_BLOCKS[type as SearchBlockType] : undefined;
+}
+
+/** The catalogue entry of a built-in eval term, or undefined (custom blocks). */
+export function evalSpec(type: string): EvalTermSpec | undefined {
+  return Object.hasOwn(EVAL_TERMS, type) ? EVAL_TERMS[type as EvalTermType] : undefined;
 }

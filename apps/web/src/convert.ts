@@ -11,6 +11,10 @@ import {
   TRANSPOSITION_TABLE,
   defaultParams,
   emptyWorkspace,
+  evalSpec,
+  normalizeWorkspace,
+  parseBlock,
+  searchSpec,
   type BlockInstance,
   type EvalTermType,
   type ParamSpec,
@@ -22,12 +26,15 @@ import {
 } from "@cfs/codegen";
 import {
   BASIC_TIME_BLOCK,
+  CUSTOM_PREFIX,
   ENGINE,
   HCE,
   NEGAMAX,
   SLOT_INPUT,
   TIME,
   TT,
+  customType,
+  defineCustomBlock,
   evalType,
   fieldNames,
   searchType,
@@ -78,8 +85,11 @@ export interface ReadResult {
   problems: string[];
 }
 
+/** Looks up the source of a custom block by id (project, then library, then examples). */
+export type BlockSource = (id: string) => string | undefined;
+
 /** Reads the engine assembled in a Blockly workspace. */
-export function readWorkspace(bw: Blockly.Workspace): ReadResult {
+export function readWorkspace(bw: Blockly.Workspace, sourceOf: BlockSource = () => undefined): ReadResult {
   const engines = bw.getBlocksByType(ENGINE, false).filter((b) => b.isEnabled());
   if (engines.length === 0) {
     return { workspace: null, problems: ["Drag an Engine block onto the workspace to start."] };
@@ -102,12 +112,28 @@ export function readWorkspace(bw: Blockly.Workspace): ReadResult {
     if (b.type === TT) ws.engine.transpositionTable = readParams(b, TRANSPOSITION_TABLE.params);
   }
 
+  // Custom blocks: their parameters come from their block file.
+  const custom = (b: Blockly.Block) => {
+    if (!b.type.startsWith(CUSTOM_PREFIX)) return null;
+    const id = b.type.slice(CUSTOM_PREFIX.length);
+    const src = sourceOf(id);
+    if (src === undefined) {
+      problems.push(`The block "${id}" is not in this project or in My blocks.`);
+      return null;
+    }
+    ws.customBlocks![id] = src;
+    const block = parseBlock(src).block;
+    return { type: id, params: block ? readParams(b, block.params) : {} };
+  };
+
   const search = stack(engine, "SEARCH")[0];
   if (search?.type === NEGAMAX) {
     for (const slot of SEARCH_SLOTS) {
       for (const b of stack(search, SLOT_INPUT[slot])) {
         const type = SEARCH_BY_BLOCK.get(b.type);
         if (type) ws.search.slots[slot].push({ type, params: readParams(b, SEARCH_BLOCKS[type].params) });
+        const c = custom(b);
+        if (c) ws.search.slots[slot].push(c);
       }
     }
   } else {
@@ -119,6 +145,8 @@ export function readWorkspace(bw: Blockly.Workspace): ReadResult {
     for (const b of stack(evaluation, "TERMS")) {
       const type = EVAL_BY_BLOCK.get(b.type);
       if (type) ws.eval.terms.push({ type, params: readParams(b, EVAL_TERMS[type].params) });
+      const c = custom(b);
+      if (c) ws.eval.terms.push(c);
     }
   } else {
     problems.push("Plug a Hand-crafted evaluation block into the engine's evaluation slot.");
@@ -160,18 +188,20 @@ function inputs(entries: [string, BlockState[]][]): Record<string, { block: Bloc
   return out;
 }
 
-const searchState = (b: BlockInstance<SearchBlockType>): BlockState => ({
-  type: searchType(b.type),
-  fields: paramFields(SEARCH_BLOCKS[b.type].params, b.params),
-});
-
-const evalState = (b: BlockInstance<EvalTermType>): BlockState => ({
-  type: evalType(b.type),
-  fields: paramFields(EVAL_TERMS[b.type].params, b.params),
-});
-
 /** The Blockly state of a whole engine, ready for `serialization.blocks.append`. */
 export function engineState(ws: Workspace, x = 40, y = 40): BlockState {
+  const customState = (b: BlockInstance<string>): BlockState => {
+    const block = parseBlock(ws.customBlocks?.[b.type] ?? "").block;
+    return { type: customType(b.type), fields: paramFields(block?.params ?? [], b.params) };
+  };
+  const searchState = (b: BlockInstance<string>): BlockState => {
+    const spec = searchSpec(b.type);
+    return spec ? { type: searchType(b.type as SearchBlockType), fields: paramFields(spec.params, b.params) } : customState(b);
+  };
+  const evalState = (b: BlockInstance<string>): BlockState => {
+    const spec = evalSpec(b.type);
+    return spec ? { type: evalType(b.type as EvalTermType), fields: paramFields(spec.params, b.params) } : customState(b);
+  };
   const settings: BlockState[] = [];
   const tm = ws.engine.timeManagement;
   if (tm) {
@@ -185,7 +215,7 @@ export function engineState(ws: Workspace, x = 40, y = 40): BlockState {
   }
   const negamax: BlockState = {
     type: NEGAMAX,
-    inputs: inputs(SEARCH_SLOTS.map((slot) => [SLOT_INPUT[slot], ws.search.slots[slot].map(searchState)])),
+    inputs: inputs(SEARCH_SLOTS.map((slot) => [SLOT_INPUT[slot], (ws.search.slots[slot] ?? []).map(searchState)])),
   };
   const hce: BlockState = { type: HCE, inputs: inputs([["TERMS", ws.eval.terms.map(evalState)]]) };
   return {
@@ -203,6 +233,10 @@ export function engineState(ws: Workspace, x = 40, y = 40): BlockState {
 
 /** Replaces everything in `bw` with the given engine. */
 export function loadWorkspace(bw: Blockly.Workspace, ws: Workspace): void {
+  for (const src of Object.values(ws.customBlocks ?? {})) {
+    const block = parseBlock(src).block;
+    if (block?.id) defineCustomBlock(block);
+  }
   Blockly.Events.disable();
   try {
     bw.clear();
@@ -225,10 +259,10 @@ export function parseWorkspaceFile(text: string): Workspace {
   if (tm && !("type" in tm)) {
     engine.timeManagement = { type: "time_management", params: tm as Params };
   }
-  return {
+  return normalizeWorkspace({
     ...base,
     ...data,
     engine: engine as Workspace["engine"],
     search: { ...base.search, slots: { ...base.search.slots, ...data.search.slots } },
-  } as Workspace;
+  } as Workspace);
 }

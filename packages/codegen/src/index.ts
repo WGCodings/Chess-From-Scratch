@@ -9,3 +9,6 @@ export * from "./blocks";
 export * from "./workspace";
 export * from "./template";
 export * from "./generate";
+export * from "./blockfile";
+export * from "./custom";
+export * from "./fromcode";

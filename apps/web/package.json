@@ -12,16 +12,31 @@
     "preview": "vite preview",
     "pretypecheck": "npm run embed -w @cfs/codegen",
     "pretest": "npm run embed -w @cfs/codegen",
-    "test": "vitest run"
+    "test": "vitest run",
+    "e2e": "npm run embed -w @cfs/codegen && node scripts/copy-blockly-media.mjs && tsx e2e/run.mts"
   },
   "dependencies": {
     "@cfs/codegen": "^0.1.0",
+    "@codemirror/autocomplete": "^6.20.4",
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-rust": "^6.0.2",
+    "@codemirror/language": "^6.13.1",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/search": "^6.7.2",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/theme-one-dark": "^6.1.3",
+    "@codemirror/view": "^6.43.15",
+    "@lezer/common": "^1.5.4",
+    "@lezer/rust": "^1.0.3",
     "blockly": "^13.4.0",
+    "codemirror": "^6.0.2",
     "fflate": "^0.8.3"
   },
   "devDependencies": {
+    "playwright-core": "^1.56.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "tsx": "^4.23.15"
   }
 }

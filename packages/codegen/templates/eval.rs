@@ -45,6 +45,8 @@ pub fn evaluate(board: &Board) -> i32 {
     score += passed_pawns(board, PASSED_PAWN);
     // @end eval_passed_pawns
 
+    // @hook eval
+
     // Blend middlegame and endgame by game phase. Terms score from White's point of view, so
     // flip the sign when Black is to move.
     let white = taper(score, phase(board));
@@ -395,6 +397,8 @@ pub fn passed_pawns(board: &Board, by_rank: [S; 8]) -> S {
     })
 }
 // @end eval_passed_pawns
+
+// @hook eval_helpers
 
 // @block tests
 #[cfg(test)]

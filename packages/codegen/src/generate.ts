@@ -14,9 +14,13 @@ import {
 } from "./blocks";
 import { TEMPLATES } from "./embedded.generated";
 import { renderTemplateWithOwners } from "./template";
+import { applyToGenerated, customFiles, moduleOf, traceTemplate, type Origin } from "./custom";
+import { serializeBlock, type BlockFile } from "./blockfile";
 import {
   KNOWN_REGIONS,
   enabledRegions,
+  normalizeWorkspace,
+  placedCustomBlocks,
   validate,
   type Issue,
   type Params,
@@ -28,6 +32,16 @@ export interface GeneratedFile {
   contents: string;
   /** Rust templates only: for each line, the blocks whose code it is (empty = skeleton). */
   owners?: string[][];
+  /** Rust templates and block files: where each line came from (for editing code in place). */
+  origins?: Origin[];
+  /** Hooks in this file: `at` = the line they stand before, `text` = the hook line itself. */
+  hooks?: HookMark[];
+}
+
+export interface HookMark {
+  at: number;
+  name: string;
+  text: string;
 }
 
 export class GenerateError extends Error {
@@ -44,7 +58,10 @@ export function toCrateName(name: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   if (slug.length === 0) return "my-engine";
-  return /^[0-9]/.test(slug) ? `engine-${slug}` : slug;
+  if (/^[0-9]/.test(slug)) return `engine-${slug}`;
+  // Names Cargo reserves for its own folders or the standard library.
+  const reserved = ["build", "deps", "examples", "incremental", "target", "test", "std", "core", "alloc"];
+  return reserved.includes(slug) ? `${slug}-engine` : slug;
 }
 
 /** A Rust string literal. */
@@ -121,6 +138,12 @@ export function generateParams(ws: Workspace): string {
   if (ws.engine.transpositionTable) {
     push(paramSection("transposition_table", TRANSPOSITION_TABLE.params, ws.engine.transpositionTable));
   }
+  // Custom blocks: a version of a built-in block takes that block's place.
+  const instances = new Map([...Object.values(ws.search.slots).flat(), ...ws.eval.terms].map((b) => [b.type, b.params]));
+  const customSection = (b: BlockFile) =>
+    paramSection(b.id, b.params, { ...Object.fromEntries(b.params.map((p) => [p.key, p.default])), ...instances.get(b.id) });
+  const custom = placedCustomBlocks(ws);
+  const forks = new Map(custom.filter((b) => b.base).map((b) => [b.base!, b]));
   // Catalogue order keeps the file stable however blocks are arranged.
   const placed = new Map(
     Object.values(ws.search.slots)
@@ -130,12 +153,18 @@ export function generateParams(ws: Workspace): string {
   for (const [type, spec] of Object.entries(SEARCH_BLOCKS)) {
     const params = placed.get(type as keyof typeof SEARCH_BLOCKS);
     if (params) push(paramSection(type, spec.params, params));
+    const fork = forks.get(type);
+    if (fork) push(customSection(fork));
   }
   const terms = new Map(ws.eval.terms.map((t) => [t.type, t.params]));
   for (const [type, spec] of Object.entries(EVAL_TERMS)) {
     const params = terms.get(type as keyof typeof EVAL_TERMS);
     if (params) push(paramSection(`eval_${type}`, spec.params, params));
+    const fork = forks.get(type);
+    if (fork) push(customSection(fork));
   }
+  // New blocks, in placement order.
+  for (const b of custom) if (!b.base) push(customSection(b));
 
   return [
     "//! Every block parameter as a constant. Edit these to tune the engine.",
@@ -156,8 +185,8 @@ function templateFiles(ws: Workspace): (keyof typeof TEMPLATES)[] {
   return files;
 }
 
-export function generateMain(ws: Workspace): string {
-  const modules = ["params", ...templateFiles(ws)].sort();
+export function generateMain(ws: Workspace, extraModules: string[] = []): string {
+  const modules = [...new Set(["params", ...templateFiles(ws), ...extraModules])].sort();
   return [
     `// ${ws.engine.name.replace(/[\r\n]+/g, " ")}: built with Chess From Scratch.`,
     "//",
@@ -269,7 +298,11 @@ instance, which uses the \`bench\` command above.
 - The other files in \`src/\` (UCI, board, time management, ...) are the
   machinery around it. They only contain what your blocks need, and you are
   free to change them too.
-- \`workspace.json\`: your blocks; open it in Chess From Scratch to keep editing.
+- \`workspace.json\`: your blocks; open it in Chess From Scratch to keep editing.${
+    Object.keys(ws.customBlocks ?? {}).length
+      ? "\n- \`blocks/\`: your own blocks as block files, to import into other projects."
+      : ""
+  }
 `;
 }
 
@@ -288,23 +321,58 @@ export interface GenerateOptions {
 
 /** Generates every file of the exported project. Throws on validation errors. */
 export function generateProject(ws: Workspace, options: GenerateOptions = {}): GeneratedFile[] {
+  normalizeWorkspace(ws);
   const errors = validate(ws).filter((i) => i.level === "error");
   if (errors.length > 0) throw new GenerateError(errors);
 
+  const blocks = placedCustomBlocks(ws);
   const enabled = enabledRegions(ws, options.includeTests);
+  const known = new Set([...KNOWN_REGIONS, ...blocks.map((b) => b.id)]);
   const render = (name: keyof typeof TEMPLATES): GeneratedFile => {
-    const r = renderTemplateWithOwners(TEMPLATES[name], enabled, KNOWN_REGIONS, `${name}.rs`);
-    return { path: `src/${name}.rs`, contents: r.text, owners: r.owners };
+    const traced = traceTemplate(TEMPLATES[name], `${name}.rs`, blocks);
+    const r = renderTemplateWithOwners(traced.lines.join("\n"), enabled, known, `${name}.rs`);
+    return {
+      path: `src/${name}.rs`,
+      contents: r.text,
+      owners: r.owners,
+      origins: r.sources.map((k) => traced.origins[k]!),
+      hooks: r.hooks.map((h) => {
+        const text = traced.lines[h.source]!;
+        return { at: h.at, name: /@hook (\w+)/.exec(text)![1]!, text };
+      }),
+    };
   };
+  const extra = customFiles(blocks);
+  const generated = (contents: string, file: string) => (blocks.length ? applyToGenerated(contents, file, blocks) : contents);
+  const ownedBy = (contents: string, owner: string) => contents.replace(/\n$/, "").split("\n").map(() => [owner]);
+  const custom = Object.entries(ws.customBlocks ?? {}).sort(([a], [b]) => a.localeCompare(b));
 
   return [
-    { path: "Cargo.toml", contents: generateCargoToml(ws) },
+    { path: "Cargo.toml", contents: generated(generateCargoToml(ws), "Cargo.toml") },
     { path: "README.md", contents: generateReadme(ws) },
     { path: ".gitignore", contents: GITIGNORE },
     { path: ".cargo/config.toml", contents: CARGO_CONFIG },
     { path: "workspace.json", contents: `${JSON.stringify(ws, null, 2)}\n` },
-    { path: "src/main.rs", contents: generateMain(ws) },
-    { path: "src/params.rs", contents: generateParams(ws) },
+    ...custom.map(([id, src]) => ({ path: `blocks/${id}.block.rs`, contents: src.endsWith("\n") ? src : `${src}\n` })),
+    {
+      path: "src/main.rs",
+      contents: generated(generateMain(ws, extra.map((f) => moduleOf(f.path)).filter((m): m is string => !!m)), "main.rs"),
+    },
+    { path: "src/params.rs", contents: generated(generateParams(ws), "params.rs") },
     ...templateFiles(ws).map(render),
+    ...extra.map((f) => ({
+      path: f.path,
+      contents: f.contents,
+      owners: ownedBy(f.contents, f.owner),
+      origins: f.contents
+        .replace(/\n$/, "")
+        .split("\n")
+        .map((_, line): Origin => ({ t: "body", block: f.owner, section: f.section, line })),
+    })),
   ];
+}
+
+/** A block file for a block, e.g. to export it on its own. */
+export function blockFileText(block: BlockFile): string {
+  return serializeBlock(block);
 }

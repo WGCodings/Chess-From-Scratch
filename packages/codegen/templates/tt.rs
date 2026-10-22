@@ -4,9 +4,9 @@ use cozy_chess::Move;
 
 use crate::score::MATE_BOUND;
 
-// @block tt_move_ordering
+// @block tt_move_ordering|use_tt_move
 use cozy_chess::{Piece, Square};
-// @end tt_move_ordering
+// @end tt_move_ordering|use_tt_move
 
 /// What a stored score says about the true score.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -34,12 +34,12 @@ pub struct TtEntry {
 }
 
 impl TtEntry {
-    // @block tt_move_ordering
+    // @block tt_move_ordering|use_tt_move
     /// The best move found, if any.
     pub fn mv(&self) -> Option<Move> {
         unpack_move(self.mv)
     }
-    // @end tt_move_ordering
+    // @end tt_move_ordering|use_tt_move
 
     /// True when the stored bound proves a cutoff for this window.
     pub fn cuts(&self, score: i32, alpha: i32, beta: i32) -> bool {
@@ -151,7 +151,7 @@ fn pack_move(mv: Move) -> u16 {
     mv.from as u16 | (mv.to as u16) << 6 | promo << 12
 }
 
-// @block tt_move_ordering
+// @block tt_move_ordering|use_tt_move
 fn unpack_move(packed: u16) -> Option<Move> {
     if packed == 0 {
         return None;
@@ -163,7 +163,7 @@ fn unpack_move(packed: u16) -> Option<Move> {
         promotion: (promo > 0).then(|| Piece::index(promo - 1)),
     })
 }
-// @end tt_move_ordering
+// @end tt_move_ordering|use_tt_move
 
 // @block tests
 #[cfg(test)]

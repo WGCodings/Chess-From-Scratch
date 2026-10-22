@@ -22,10 +22,12 @@
             <option value="empty">Empty skeleton</option>
           </select>
         </label>
-        <button id="open" class="btn" type="button">Open</button>
-        <button id="save" class="btn" type="button">Save</button>
+        <button id="open" class="btn" type="button" title="Open a .cfs project, a workspace.json or a .block.rs block file">Open</button>
+        <button id="save" class="btn" type="button" title="Save the project with its blocks as a .cfs file">Save</button>
+        <button id="link-folder" class="btn" type="button" hidden title="Write the project into a folder on your computer and keep it in sync, to edit it in VS Code or any editor">Link folder</button>
+        <span id="folder-status" class="folder-status" hidden></span>
         <button id="export" class="btn primary" type="button">Export Rust project</button>
-        <input id="file" type="file" accept=".json,application/json" hidden />
+        <input id="file" type="file" accept=".cfs,.zip,.json,.rs,application/json,application/zip" hidden />
       </div>
     </header>
 
@@ -38,10 +40,17 @@
           <div class="code-wrap">
             <div class="code-head">
               <span id="code-path" class="code-path"></span>
+              <span id="code-hint" class="code-hint">Double-click a line to edit its block</span>
+              <button id="edit-code" class="btn small" type="button" title="Edit this file: code between // @block name and // @end name lines becomes blocks">Edit code</button>
+              <button id="format-code" class="btn small" type="button" title="Re-indent the code (Shift+Alt+F)" hidden>Format</button>
+              <button id="cancel-code" class="btn small" type="button" hidden>Cancel</button>
+              <button id="save-code" class="btn small primary-dark" type="button" hidden>Save as blocks</button>
               <button id="copy" class="btn small" type="button">Copy</button>
             </div>
+            <ul id="code-errors" class="code-errors" hidden></ul>
             <section id="tour" class="tour" hidden aria-live="polite"></section>
             <pre id="code" class="code" tabindex="0"></pre>
+            <div id="code-editor" class="code-editor" hidden></div>
           </div>
         </div>
         <section class="issues" aria-live="polite">

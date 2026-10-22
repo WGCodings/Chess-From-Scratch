@@ -19,17 +19,19 @@ use crate::score::{print_info, IterationInfo, INF, MATE, MATE_BOUND, MAX_PLY};
 use crate::time::TimeManager;
 use crate::uci::{Engine, SearchResult};
 
-// @block mvv_lva|quiescence
+// @block mvv_lva|quiescence|use_is_capture
 use crate::moves::is_capture;
-// @end mvv_lva|quiescence
-// @block killers|history|late_move_reductions
+// @end mvv_lva|quiescence|use_is_capture
+// @block killers|history|late_move_reductions|use_quiet
 use crate::moves::is_quiet;
-// @end killers|history|late_move_reductions
+// @end killers|history|late_move_reductions|use_quiet
 
 // @block transposition_table
 // The transposition table stores results of positions searched before.
 use crate::tt::{score_from_tt, score_to_tt, Bound, TranspositionTable};
 // @end transposition_table
+
+// @hook search_imports
 
 /// Everything the search keeps: counters, the clock, the stop flag and the best line.
 pub struct Searcher {
@@ -56,6 +58,7 @@ pub struct Searcher {
     // Precomputed reductions by depth and move number.
     lmr: [[i32; 64]; 64],
     // @end late_move_reductions
+    // @hook searcher_fields
 }
 
 // The interface the UCI loop talks to: name, author, setup and searching.
@@ -94,6 +97,7 @@ impl Engine for Searcher {
             // Fill the reduction table once at startup.
             lmr: lmr_table(),
             // @end late_move_reductions
+            // @hook searcher_init
         }
     }
 
@@ -111,6 +115,7 @@ impl Engine for Searcher {
         // A new game: forget the history scores.
         self.history.clear();
         // @end history
+        // @hook new_game
     }
 
     // @block transposition_table
@@ -139,6 +144,7 @@ impl Engine for Searcher {
         // Killers are tied to plies of one search, so start each search fresh.
         self.killers.clear();
         // @end killers
+        // @hook root
 
         // Work on our own copy of the position; no best move yet.
         let mut pos = pos.clone();
@@ -276,15 +282,16 @@ impl Searcher {
     /// of its replies, searched `depth` moves deep.
     fn negamax(&mut self, pos: &mut Position, depth: i32, ply: usize) -> i32 {
         // @end alpha_beta
-        // @block transposition_table|reverse_futility_pruning|null_move_pruning|late_move_reductions
+        // @block transposition_table|reverse_futility_pruning|null_move_pruning|late_move_reductions|use_pv_node
         // A PV node has an open window, so its exact score matters: prune it less.
         let pv_node = beta - alpha > 1;
-        // @end transposition_table|reverse_futility_pruning|null_move_pruning|late_move_reductions
+        // @end transposition_table|reverse_futility_pruning|null_move_pruning|late_move_reductions|use_pv_node
         // Forget the PV below this node; it is rebuilt from the moves searched here.
         self.pv.clear(ply);
 
         // At the horizon, stop searching and score the position.
         if depth <= 0 {
+            // @hook leaf
             // @block quiescence
             // At depth 0 keep searching captures so we never evaluate in the middle of an
             // exchange.
@@ -310,22 +317,22 @@ impl Searcher {
         }
 
         let board = pos.board().clone();
-        // @block null_move_pruning|history
+        // @block null_move_pruning|history|use_stm
         let stm = board.side_to_move();
-        // @end null_move_pruning|history
+        // @end null_move_pruning|history|use_stm
         let in_check = !board.checkers().is_empty();
 
         // @block transposition_table
         // Seen this position before at enough depth? Reuse that result, and remember its best
         // move.
-        // @block tt_move_ordering
+        // @block tt_move_ordering|use_tt_move
         let mut tt_move = None;
-        // @end tt_move_ordering
+        // @end tt_move_ordering|use_tt_move
         // Look the position up by its hash.
         if let Some(entry) = self.tt.probe(board.hash()) {
-            // @block tt_move_ordering
+            // @block tt_move_ordering|use_tt_move
             tt_move = entry.mv();
-            // @end tt_move_ordering
+            // @end tt_move_ordering|use_tt_move
             // Searched deep enough before, and the stored bound settles this window: done.
             let tt_score = score_from_tt(entry.score, ply);
             if !pv_node && entry.depth as i32 >= depth && entry.cuts(tt_score, alpha, beta) {
@@ -334,10 +341,12 @@ impl Searcher {
         }
         // @end transposition_table
 
-        // @block reverse_futility_pruning|null_move_pruning
+        // @hook node_start
+
+        // @block reverse_futility_pruning|null_move_pruning|use_static_eval
         // The static evaluation guides the pruning decisions below.
         let static_eval = if in_check { -INF } else { evaluate(&board) };
-        // @end reverse_futility_pruning|null_move_pruning
+        // @end reverse_futility_pruning|null_move_pruning|use_static_eval
 
         // @block reverse_futility_pruning
         // Static eval is far above beta even after a safety margin: assume the node fails high.
@@ -373,17 +382,19 @@ impl Searcher {
         }
         // @end null_move_pruning
 
+        // @hook pruning
+
         // No legal moves: checkmate (bad, sooner is worse) or stalemate (a draw).
-        // @block tt_move_ordering|mvv_lva|killers|history
+        // @block tt_move_ordering|mvv_lva|killers|history|slot_ordering
         let mut moves = MoveList::all(&board);
         // @else
         let moves = MoveList::all(&board);
-        // @end tt_move_ordering|mvv_lva|killers|history
+        // @end tt_move_ordering|mvv_lva|killers|history|slot_ordering
         if moves.is_empty() {
             return if in_check { -MATE + ply as i32 } else { 0 };
         }
 
-        // @block tt_move_ordering|mvv_lva|killers|history
+        // @block tt_move_ordering|mvv_lva|killers|history|slot_ordering
         // Give every move an ordering score; the loop below tries the highest scores first.
         for i in 0..moves.len() {
             let mv = moves.get(i);
@@ -417,9 +428,10 @@ impl Searcher {
                 order = self.history.get(stm, mv);
             }
             // @end history
+            // @hook ordering
             moves.set_score(i, order);
         }
-        // @end tt_move_ordering|mvv_lva|killers|history
+        // @end tt_move_ordering|mvv_lva|killers|history|slot_ordering
 
         // @block transposition_table
         // Remember the window we started with, to know what kind of score we store.
@@ -434,16 +446,24 @@ impl Searcher {
 
         // Try every move: play it, search the reply, take it back.
         for i in 0..moves.len() {
-            // @block tt_move_ordering|mvv_lva|killers|history
+            // @block tt_move_ordering|mvv_lva|killers|history|slot_ordering
             let mv = moves.pick(i);
             // @else
             let mv = moves.get(i);
-            // @end tt_move_ordering|mvv_lva|killers|history
-            // @block killers|history|late_move_reductions
+            // @end tt_move_ordering|mvv_lva|killers|history|slot_ordering
+            // @block killers|history|late_move_reductions|use_quiet
             let quiet = is_quiet(&board, mv);
-            // @end killers|history|late_move_reductions
+            // @end killers|history|late_move_reductions|use_quiet
             pos.make_move(mv);
+            // @block slot_extensions|slot_reductions
+            // Extensions and reductions: some moves deserve a deeper (or shallower) search.
+            let mut extension = 0;
+            // @hook extensions
+            // @hook reductions
+            let new_depth = depth - 1 + extension;
+            // @else
             let new_depth = depth - 1;
+            // @end slot_extensions|slot_reductions
 
             // @block alpha_beta
             // @block principal_variation_search|late_move_reductions
@@ -501,6 +521,8 @@ impl Searcher {
                 return 0;
             }
 
+            // @hook move_loop
+
             // A new best move: remember it and its line.
             if score > best_score {
                 best_score = score;
@@ -534,6 +556,7 @@ impl Searcher {
                             }
                         }
                         // @end history
+                        // @hook on_cutoff
                         // Skip the remaining moves.
                         break;
                     }
@@ -742,3 +765,5 @@ impl History {
     }
 }
 // @end history
+
+// @hook search_helpers

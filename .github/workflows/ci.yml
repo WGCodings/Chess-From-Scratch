@@ -22,7 +22,7 @@ jobs:
         run: |
           cargo build --release -p cfs-reference
           ./target/release/cfs-reference bench | tee bench.txt
-          grep -q '^945193 nodes' bench.txt
+          grep -q '^150455 nodes' bench.txt
 
   web:
     name: TypeScript (typecheck, test, build)
@@ -53,3 +53,16 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check:generated -w @cfs/codegen
+
+  e2e:
+    name: Editor in a browser (e2e)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # GitHub's Ubuntu images come with Google Chrome; the tests use it.
+      - run: npm run e2e -w @cfs/web

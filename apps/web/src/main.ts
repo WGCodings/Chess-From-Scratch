@@ -1,22 +1,63 @@
 import * as Blockly from "blockly";
-import { strToU8, zipSync } from "fflate";
+import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import {
+  EXAMPLE_BLOCKS,
+  BASIC_TIME,
+  EVAL_TERMS,
+  SEARCH_BLOCKS,
+  TIME_MANAGEMENT,
+  TRANSPOSITION_TABLE,
   GenerateError,
+  HOOKS,
+  codeToBlocks,
   emptyWorkspace,
+  evalSpec,
+  forkBlock,
+  freeId,
   generateProject,
+  newBlockSource,
+  parseBlock,
   referenceWorkspace,
+  searchSpec,
   starterWorkspace,
   toCrateName,
   validate,
+  viewOf,
+  type CodeResult,
+  type CustomSlot,
+  type Diagnostic,
   type GeneratedFile,
   type Issue,
+  type ParamSpec,
   type Workspace,
 } from "@cfs/codegen";
-import { COLOURS, ENGINE, defineBlocks, maxInstances, toolbox } from "./blocks";
+import {
+  COLOURS,
+  CUSTOM_PREFIX,
+  ENGINE,
+  HCE,
+  IMPORT_BLOCK_BUTTON,
+  NEGAMAX,
+  NEW_BLOCK_BUTTON,
+  SLOT_INPUT,
+  customType,
+  defineBlocks,
+  defineCustomBlock,
+  fieldNames,
+  maxInstances,
+  toolbox,
+  type ToolboxCustom,
+} from "./blocks";
 import { loadWorkspace, parseWorkspaceFile, readWorkspace } from "./convert";
+import { openBlockEditor, openNewBlockDialog } from "./editor";
+import { createCodeEditor, type CodeEditor } from "./codeedit";
+import { allIds, library, project, saveLibrary, setProject, sourceOf } from "./library";
+import { rustSyntaxErrors } from "./syntax";
+import { installToolboxSearch, type SearchEntry } from "./tbsearch";
+import { FolderSync, canLinkFolders, rememberFolder, rememberedFolder } from "./folder";
 import { describeCode, diffLines, explain, lineRegions, splitSections, type Hunk } from "./diff";
 import { renderCode } from "./highlight";
-import { infoForBlockType, infoForKey, placedKeys, type BlockInfo } from "./info";
+import { infoForBlockType, infoForKey, placedKeys, setCustomLookup, type BlockInfo } from "./info";
 import "./style.css";
 
 const STORAGE_KEY = "cfs.blockly.v1";
@@ -69,6 +110,82 @@ Blockly.ContextMenuRegistry.registry.register({
     if (scope.block) explainBlock(scope.block);
   },
 });
+
+/** The built-in block type (search block or eval term) of a Blockly block, if any. */
+function builtinOf(block: Blockly.Block): string | null {
+  const t = block.type;
+  if (t.startsWith("cfs_search_")) return t.slice("cfs_search_".length);
+  if (t.startsWith("cfs_eval_")) return t.slice("cfs_eval_".length);
+  return null;
+}
+const customIdOf = (block: Blockly.Block) => (block.type.startsWith(CUSTOM_PREFIX) ? block.type.slice(CUSTOM_PREFIX.length) : null);
+
+Blockly.ContextMenuRegistry.registry.register({
+  id: "cfsEdit",
+  scopeType: Blockly.ContextMenuRegistry.ScopeType.BLOCK,
+  displayText: (scope) => (scope.block && customIdOf(scope.block) ? "Edit this block" : "Edit this block (make your own version)"),
+  weight: -9,
+  preconditionFn: (scope) => (scope.block && (builtinOf(scope.block) || customIdOf(scope.block)) ? "enabled" : "hidden"),
+  callback: (scope) => {
+    if (scope.block) editBlock(scope.block);
+  },
+});
+
+Blockly.ContextMenuRegistry.registry.register({
+  id: "cfsExportBlock",
+  scopeType: Blockly.ContextMenuRegistry.ScopeType.BLOCK,
+  displayText: "Export block file",
+  weight: -8,
+  preconditionFn: (scope) => (scope.block && customIdOf(scope.block) ? "enabled" : "hidden"),
+  callback: (scope) => {
+    const id = scope.block && customIdOf(scope.block);
+    const src = id ? sourceOf(id) : undefined;
+    if (id && src) download(`${id}.block.rs`, src, "text/plain");
+  },
+});
+
+Blockly.ContextMenuRegistry.registry.register({
+  id: "cfsForgetBlock",
+  scopeType: Blockly.ContextMenuRegistry.ScopeType.BLOCK,
+  displayText: "Remove from My blocks",
+  weight: -7,
+  preconditionFn: (scope) => {
+    const id = scope.block && customIdOf(scope.block);
+    return id && library[id] !== undefined ? "enabled" : "hidden";
+  },
+  callback: (scope) => {
+    const id = scope.block && customIdOf(scope.block);
+    if (!id) return;
+    if (!window.confirm(`Remove "${parseBlock(library[id]!).block?.label ?? id}" from My blocks? Projects that use it keep their copy.`)) return;
+    delete library[id];
+    saveLibrary();
+    updateCustomBlocks();
+    toast("Removed from My blocks");
+  },
+});
+
+/** Everything the toolbox search can find. */
+function searchEntries(): SearchEntry[] {
+  const out: SearchEntry[] = [
+    { type: ENGINE, label: "Engine", text: "root name author bench" },
+    { type: NEGAMAX, label: "Negamax search", text: "search skeleton iterative deepening" },
+    { type: HCE, label: "Hand-crafted evaluation", text: "eval evaluation skeleton terms" },
+    { type: "cfs_basic_time", label: BASIC_TIME.label, text: `time ${BASIC_TIME.description}` },
+    { type: "cfs_time_management", label: TIME_MANAGEMENT.label, text: `time ${TIME_MANAGEMENT.description}` },
+    { type: "cfs_transposition_table", label: TRANSPOSITION_TABLE.label, text: `tt hash ${TRANSPOSITION_TABLE.description}` },
+  ];
+  for (const [t, spec] of Object.entries(SEARCH_BLOCKS)) out.push({ type: `cfs_search_${t}`, label: spec.label, text: `${spec.slot} ${spec.description}` });
+  for (const [t, spec] of Object.entries(EVAL_TERMS)) out.push({ type: `cfs_eval_${t}`, label: spec.label, text: `eval term ${spec.description}` });
+  for (const id of allIds()) {
+    const b = parseBlock(sourceOf(id) ?? "").block;
+    if (b?.id === id && Blockly.Blocks[customType(id)]) out.push({ type: customType(id), label: b.label, text: `my blocks custom ${b.slot} ${b.description} ${id}` });
+  }
+  return out;
+}
+installToolboxSearch(bw, searchEntries);
+
+bw.registerButtonCallback(NEW_BLOCK_BUTTON, () => openNewBlockDialog(createNewBlock));
+bw.registerButtonCallback(IMPORT_BLOCK_BUTTON, () => fileInput.click());
 
 // Blocks not connected to an Engine block are greyed out and ignored.
 bw.addChangeListener(Blockly.Events.disableOrphans);
@@ -186,7 +303,8 @@ function renderTree(): void {
       const n = changeCounts.get(path);
       if (n) b.append(el("span", "tree-badge", `+${n}`));
       if (path === activeFile) b.setAttribute("aria-current", "true");
-      b.addEventListener("click", () => showFile(path));
+      if (editing?.drafts.has(path)) b.append(el("span", "tree-badge", "edited"));
+      b.addEventListener("click", () => (editing ? editFile(path) : showFile(path)));
       li.append(b);
       ul.append(li);
     }
@@ -223,16 +341,26 @@ function showFile(path: string, scrollTo?: number): void {
   activeFile = path;
   pathEl.textContent = path;
   const file = files.find((f) => f.path === path);
+  if (!editing) editBtn.disabled = !editable(file);
+  editBtn.title = editable(file)
+    ? "Edit this file: code between // @block name and // @end name lines becomes blocks"
+    : "This file is written from your settings and parameters";
   // During a tour, removed lines are shown in red above the code that replaced them.
   const removed = tour
     ? tour.hunks.flatMap((h, k) =>
         h.file === path && h.removedLines?.length ? [{ at: h.start, lines: h.removedLines, current: k === tour!.index }] : [],
       )
     : [];
-  codeEl.innerHTML = file ? renderCode(file.contents, lineClasses(path), removed) : "";
+  // Hooks: places where blocks can add code, shown between the lines.
+  const ghosts = (file?.hooks ?? []).map((h) => ({
+    at: h.at,
+    text: h.text,
+    title: `Hook "${h.name}": ${HOOKS[h.name]?.description ?? "added by one of your blocks."} Blocks add code here with // @hook ${h.name}, or type code below it in Edit code.`,
+  }));
+  codeEl.innerHTML = file ? renderCode(file.contents, lineClasses(path), removed, ghosts) : "";
   renderTree();
   if (scrollTo !== undefined) {
-    const rows = codeEl.querySelectorAll<HTMLElement>(".ln:not(.removed)");
+    const rows = codeEl.querySelectorAll<HTMLElement>(".ln:not(.removed):not(.hook)");
     const target = rows[Math.min(scrollTo, rows.length - 1)];
     // Show the removed lines above the change too, when there are any.
     let first: HTMLElement | undefined = target;
@@ -253,6 +381,25 @@ function focusBlock(block: Blockly.Block | null): void {
   if (path) showFile(path, firstLine(path));
   else showFile(activeFile);
 }
+
+/** Double-click a line of code to edit the block it belongs to. */
+codeEl.addEventListener("dblclick", (e) => {
+  const row = (e.target as HTMLElement).closest(".ln");
+  if (!row || row.classList.contains("removed")) return;
+  if (row.classList.contains("hook")) {
+    // A hook: start editing right there, to add code at that hook.
+    const all = [...codeEl.querySelectorAll(".ln:not(.removed)")];
+    window.getSelection()?.removeAllRanges();
+    startEditing(all.indexOf(row) + 1);
+    toast("Add your code below the hook line, between // @block name and // @end name, then Save as blocks.");
+    return;
+  }
+  const rows = [...codeEl.querySelectorAll(".ln:not(.removed):not(.hook)")];
+  const i = rows.indexOf(row);
+  if (i < 0) return;
+  window.getSelection()?.removeAllRanges();
+  editLine(activeFile, i);
+});
 
 // Tour ----------------------------------------------------------------------
 
@@ -276,7 +423,9 @@ function sortHunks(hunks: Hunk[]): Hunk[] {
     return i >= 0 ? i : p.startsWith("src/") ? TOUR_ORDER.length : TOUR_ORDER.length + 1;
   };
   return hunks
-    .filter((h) => h.file !== "workspace.json") // bookkeeping, not engine code
+    // Engine code only: workspace.json, the README and block files are bookkeeping.
+    .filter((h) => h.file.endsWith(".rs") || h.file === "Cargo.toml")
+    .filter((h) => !h.file.startsWith("blocks/"))
     .sort((a, b) => rank(a.file) - rank(b.file) || a.file.localeCompare(b.file) || a.start - b.start);
 }
 
@@ -471,10 +620,37 @@ function renderIssues(issues: Issue[]): void {
 
 let lastKeys = new Set<string>();
 let suppressTour = true;
+/** Set when a block was just saved: the next refresh tours its changes. */
+let pendingTour: { title: string; keys: string[] } | null = null;
+
+const MARKERISH = /^\s*(\/\/ @(block|end|else)\b.*)?$/;
+
+/** Diff hunks that change more than markers and blank lines (a fork renames markers only). */
+function meaningful(h: Hunk): boolean {
+  const code = (ls: string[]) => ls.filter((l) => !MARKERISH.test(l)).join("\n");
+  return code(lines(h.file).slice(h.start, h.end)) !== code(h.removedLines ?? []);
+}
+
+function changeHunks(before: GeneratedFile[]): Hunk[] {
+  const old = new Map(before.map((f) => [f.path, f.contents.replace(/\n$/, "").split("\n")]));
+  return files
+    .flatMap((f) => diffLines(f.path, old.get(f.path) ?? [], f.contents.replace(/\n$/, "").split("\n")))
+    .filter((h) => !h.file.startsWith("blocks/"))
+    .filter(meaningful)
+    .flatMap((h) => (h.end > h.start ? sectionHunks(h.file, h.start, h.end, h.removed, h.removedLines) : [h]));
+}
 
 function refresh(): void {
-  const { workspace, problems } = readWorkspace(bw);
+  const { workspace, problems } = readWorkspace(bw, sourceOf);
   current = workspace;
+  if (workspace) {
+    // The project's blocks are the ones placed in it.
+    const placed = workspace.customBlocks ?? {};
+    if (JSON.stringify(placed) !== JSON.stringify(project)) {
+      setProject(placed);
+      updateCustomBlocks();
+    }
+  }
   const issues: Issue[] = problems.map((message) => ({ level: "error", message }));
   if (workspace) issues.push(...validate(workspace));
   const blocking = issues.some((i) => i.level === "error");
@@ -491,6 +667,24 @@ function refresh(): void {
   exportBtn.disabled = blocking;
   renderIssues(issues);
 
+  if (pendingTour) {
+    const p = pendingTour;
+    pendingTour = null;
+    lastKeys = placedKeys(workspace);
+    if (!blocking) {
+      const hunks = sortHunks(changeHunks(before));
+      const infos = p.keys.map(infoForKey).filter((i): i is BlockInfo => !!i);
+      if (hunks.length && infos.length) {
+        startTour({ title: p.title, blocks: infos, hunks, mode: "added" });
+        return;
+      }
+      if (tour) endTour();
+      toast(hunks.length ? p.title : `${p.title}. The generated code did not change.`);
+    }
+    showFile(activeFile);
+    return;
+  }
+
   if (!blocking && files !== before) {
     const keys = placedKeys(workspace);
     const added = [...keys].filter((k) => !lastKeys.has(k)).map(infoForKey).filter((i): i is BlockInfo => !!i);
@@ -498,10 +692,7 @@ function refresh(): void {
     lastKeys = keys;
 
     if (!suppressTour && added.length > 0) {
-      const old = new Map(before.map((f) => [f.path, f.contents.replace(/\n$/, "").split("\n")]));
-      const hunks = files
-        .flatMap((f) => diffLines(f.path, old.get(f.path) ?? [], f.contents.replace(/\n$/, "").split("\n")))
-        .flatMap((h) => (h.end > h.start ? sectionHunks(h.file, h.start, h.end, h.removed, h.removedLines) : [h]));
+      const hunks = changeHunks(before);
       const title = added.length === 1 ? `${added[0]!.label} added` : `${added.length} blocks added`;
       startTour({ title, blocks: added, hunks: sortHunks(hunks), mode: "added" });
       return;
@@ -533,9 +724,578 @@ bw.addChangeListener((e: Blockly.Events.Abstract) => {
   if (!e.isUiEvent) scheduleRefresh();
 });
 
+// Custom blocks ---------------------------------------------------------------
+
+setCustomLookup((id) => {
+  const src = sourceOf(id);
+  return src === undefined ? null : parseBlock(src).block;
+});
+
+let toolboxSignature = "";
+
+/** Defines every known custom block type and refreshes the My blocks category. */
+function updateCustomBlocks(): void {
+  const entries: ToolboxCustom[] = [];
+  const add = (id: string, group: ToolboxCustom["group"]) => {
+    const block = parseBlock(sourceOf(id) ?? "").block;
+    if (!block?.id || block.id !== id) return;
+    const type = defineCustomBlock(block);
+    (bw.options.maxInstances ??= {})[type] = 1;
+    entries.push({ id, group });
+  };
+  for (const id of Object.keys(project)) add(id, "project");
+  for (const id of Object.keys(library)) if (!(id in project)) add(id, "library");
+  for (const id of Object.keys(EXAMPLE_BLOCKS)) if (!(id in project) && !(id in library)) add(id, "example");
+  const signature = JSON.stringify(entries) + JSON.stringify(entries.map((e) => sourceOf(e.id)));
+  if (signature !== toolboxSignature) {
+    toolboxSignature = signature;
+    bw.updateToolbox(toolbox(entries));
+  }
+}
+
+type State = Blockly.serialization.blocks.State;
+
+/** Visits every block state in a saved workspace. */
+function walk(state: State, fn: (b: State) => void): void {
+  fn(state);
+  for (const input of Object.values(state.inputs ?? {})) if (input.block) walk(input.block, fn);
+  if (state.next?.block) walk(state.next.block, fn);
+}
+
+/** Saves the workspace, lets `edit` change the saved state, and loads it again. */
+function rebuild(edit: (blocks: State[]) => void): void {
+  const saved = Blockly.serialization.workspaces.save(bw) as { blocks?: { blocks: State[] } };
+  const blocks = saved.blocks?.blocks ?? [];
+  edit(blocks);
+  Blockly.Events.disable();
+  try {
+    Blockly.serialization.workspaces.load(saved, bw);
+  } finally {
+    Blockly.Events.enable();
+  }
+}
+
+/** Field values of a built-in block renamed to the matching parameters of its version. */
+function mapFields(fields: Record<string, unknown> | undefined, from: ParamSpec[], to: ParamSpec[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const p of from) {
+    const q = to.find((t) => t.rust === p.rust && t.type === p.type);
+    if (!q) continue;
+    const a = fieldNames(p);
+    const b = fieldNames(q);
+    a.forEach((name, i) => {
+      if (fields?.[name] !== undefined) out[b[i]!] = fields[name];
+    });
+  }
+  return out;
+}
+
+/** The statement input a block in `slot` goes into, as [skeleton type, input name]. */
+function inputFor(slot: CustomSlot): [string, string] {
+  return slot === "eval" ? [HCE, "TERMS"] : [NEGAMAX, SLOT_INPUT[slot]];
+}
+
+/** Appends a new block state at the end of the slot's stack. Returns false without an engine. */
+function appendToSlot(blocks: State[], slot: CustomSlot, block: State): boolean {
+  const [skeleton, input] = inputFor(slot);
+  let done = false;
+  for (const root of blocks) {
+    if (root.type !== ENGINE) continue;
+    walk(root, (b) => {
+      if (done || b.type !== skeleton) return;
+      b.inputs ??= {};
+      if (!b.inputs[input]?.block) b.inputs[input] = { block };
+      else {
+        let last = b.inputs[input].block!;
+        while (last.next?.block) last = last.next.block;
+        last.next = { block };
+      }
+      done = true;
+    });
+    if (done) break;
+  }
+  return done;
+}
+
+interface SaveContext {
+  /** The id the block had when the editor opened (null for new blocks and new versions). */
+  originalId: string | null;
+  /** Blockly id of the built-in block this new version replaces. */
+  replaces?: string;
+  /** Put the block into the engine after saving (new blocks). */
+  place?: boolean;
+}
+
+/** Saves an edited block file into My blocks and the project, then updates the workspace. */
+function saveBlockSource(src: string, ctx: SaveContext): string | null {
+  const { block, diagnostics } = parseBlock(src);
+  const error = diagnostics.find((d) => d.level === "error");
+  if (!block || error) return error?.message ?? "This block file cannot be read.";
+  const id = block.id;
+  if (id !== ctx.originalId && allIds().includes(id)) {
+    return `A block with id "${id}" already exists in My blocks. Change the id on line 2, or edit that block instead.`;
+  }
+  library[id] = src;
+  saveLibrary();
+  const inProject = ctx.replaces || ctx.place || (ctx.originalId !== null && ctx.originalId in project);
+  if (inProject) setProject({ ...project, [id]: src });
+  updateCustomBlocks();
+
+  const type = customType(id);
+  let placed = true;
+  rebuild((blocks) => {
+    for (const root of blocks) {
+      walk(root, (b) => {
+        // A built-in block becomes your version of it, keeping its values.
+        if (ctx.replaces && b.id === ctx.replaces) {
+          const base = builtinOf({ type: b.type } as Blockly.Block);
+          const spec = base ? (searchSpec(base) ?? evalSpec(base)) : undefined;
+          b.fields = mapFields(b.fields, spec?.params ?? [], block.params) as State["fields"];
+          b.type = type;
+        }
+        // A changed id renames every use.
+        if (ctx.originalId && ctx.originalId !== id && b.type === customType(ctx.originalId)) b.type = type;
+        // Fields of removed parameters would make Blockly complain.
+        if (b.type === type && b.fields) {
+          const keep = new Set(block.params.flatMap(fieldNames));
+          for (const f of Object.keys(b.fields)) if (!keep.has(f)) delete b.fields[f];
+        }
+      });
+    }
+    if (ctx.place) placed = appendToSlot(blocks, block.slot, { type });
+  });
+  pendingTour = { title: ctx.replaces ? `${block.label} saved` : ctx.place ? `${block.label} added` : `${block.label} saved`, keys: [id] };
+  refresh();
+  save();
+  if (!placed) toast(`Saved to My blocks. Drag ${block.label} from My blocks into your engine.`);
+  return null;
+}
+
+/** The checks shown in the block editor: structure, placement and a Rust syntax check. */
+function checkBlockSource(src: string, originalId: string | null): Diagnostic[] {
+  const { block, diagnostics } = parseBlock(src);
+  const out = [...diagnostics];
+  if (!block || out.some((d) => d.level === "error")) return out;
+  if (block.id !== originalId && allIds().includes(block.id)) {
+    out.push({ level: "error", line: 2, message: `A block with id "${block.id}" already exists in My blocks; pick another id.` });
+    return out;
+  }
+  // Try the block in (a copy of) the current engine.
+  const ws = structuredClone(current ?? starterWorkspace()) as Workspace;
+  ws.customBlocks = { ...ws.customBlocks, [block.id]: src };
+  const lists = [...Object.values(ws.search.slots), ws.eval.terms];
+  let found = false;
+  for (const list of lists) {
+    for (const b of list) {
+      if (b.type === block.id || (originalId && b.type === originalId) || (block.base && b.type === block.base)) {
+        if (originalId && originalId !== block.id) delete ws.customBlocks[originalId];
+        b.type = block.id;
+        found = true;
+      }
+    }
+  }
+  if (!found) (block.slot === "eval" ? ws.eval.terms : ws.search.slots[block.slot]).push({ type: block.id, params: {} });
+  const issues = validate(ws).filter((i) => i.level === "error");
+  if (issues.length) {
+    for (const i of issues) out.push({ level: "warning", line: 0, message: `In this engine: ${i.message}` });
+    return out;
+  }
+  const srcLines = src.split("\n");
+  const lineInBlock = (text: string) => {
+    const t = text.trim();
+    const k = t ? srcLines.findIndex((l) => l.trim() === t) : -1;
+    return k >= 0 ? k + 1 : 0;
+  };
+  try {
+    for (const f of generateProject(ws)) {
+      if (!f.path.endsWith(".rs") || f.path.startsWith("blocks/")) continue;
+      for (const p of rustSyntaxErrors(f.contents, 3)) {
+        out.push({
+          level: "warning",
+          line: lineInBlock(p.text),
+          message: `Rust syntax error in ${f.path} line ${p.line + 1}: ${p.text.trim() || "(blank line)"}`,
+        });
+      }
+    }
+  } catch (err) {
+    out.push({ level: "warning", line: 0, message: err instanceof Error ? err.message : String(err) });
+  }
+  return out;
+}
+
+function openEditorFor(src: string, ctx: SaveContext, subtitle: string, line?: number): void {
+  const label = parseBlock(src).block?.label ?? "block";
+  openBlockEditor({
+    title: ctx.originalId || ctx.replaces ? `Edit block: ${label}` : `New block: ${label}`,
+    subtitle,
+    source: src,
+    line,
+    check: (s) => checkBlockSource(s, ctx.originalId),
+    params: projectParams,
+    save: (s) => saveBlockSource(s, ctx),
+    exportFile: (s) => download(`${parseBlock(s).block?.id || "block"}.block.rs`, s, "text/plain"),
+  });
+}
+
+/** Edit this block: custom blocks open as they are; built-in blocks are forked first. */
+function editBlock(block: Blockly.Block, line?: number): void {
+  const id = customIdOf(block);
+  if (id) return editCustom(id, line);
+  const base = builtinOf(block);
+  const spec = base ? (searchSpec(base) ?? evalSpec(base)) : undefined;
+  if (!base || !spec) return;
+  if (block.isInFlyout) {
+    return toast(`Drag ${spec.label} into your engine first, then edit it there.`);
+  }
+  const newId = freeId(`my_${base}`, allIds());
+  openEditorFor(
+    forkBlock(base, newId),
+    { originalId: null, replaces: block.id },
+    `Your own version of ${spec.label}. Saving replaces the block in your engine and keeps it in My blocks.`,
+    line,
+  );
+}
+
+function editCustom(id: string, line?: number): void {
+  const src = sourceOf(id);
+  if (src === undefined) return toast(`The block "${id}" is not available.`);
+  openEditorFor(src, { originalId: id }, `${id}.block.rs · saved in My blocks${id in project ? " and in this project" : ""}`, line);
+}
+
+function createNewBlock(label: string, slot: CustomSlot): void {
+  const id = freeId(label, allIds());
+  openEditorFor(newBlockSource(id, label, slot), { originalId: null, place: true }, `${id}.block.rs · a new block`);
+}
+
+/** Double-click on a line of generated code. */
+function editLine(path: string, i: number): void {
+  const text = lines(path)[i] ?? "";
+  if (path.startsWith("blocks/")) {
+    return editCustom(path.slice("blocks/".length).replace(/\.block\.rs$/, ""), i + 1);
+  }
+  const owners = ownersOf(path)[i] ?? [];
+  const inner = owners.filter((o) => !o.startsWith("!")).at(-1);
+  const names = inner?.split("|") ?? [];
+  // The block's own text, to put the cursor on the same line in the editor.
+  const lineIn = (src: string | undefined) => {
+    const k = src?.split("\n").findIndex((l) => l.trim() !== "" && l.trim() === text.trim()) ?? -1;
+    return k >= 0 ? k + 1 : undefined;
+  };
+  const custom = names.find((n) => sourceOf(n) !== undefined && !searchSpec(n));
+  if (custom) return editCustom(custom, lineIn(sourceOf(custom)));
+  if (names.length > 1) {
+    const labels = names.map((n) => infoForKey(n)?.label ?? n).join(", ");
+    return toast(`Shared code: generated when any of these is placed: ${labels}.`);
+  }
+  if (names.length === 1) {
+    const key = names[0]!;
+    const base = key.startsWith("eval_") ? key.slice(5) : key;
+    const info = infoForKey(key);
+    const block = bw.getAllBlocks(false).find((b) => builtinOf(b) === base && b.isEnabled());
+    if (!block || !info) return toast("This code belongs to a setting block; it cannot be edited as a block yet.");
+    if (window.confirm(`This line belongs to ${info.label}, a built-in block. Make your own version of it to edit this code?`)) {
+      editBlock(block, lineIn(forkBlock(base, "x")));
+    }
+    return;
+  }
+  // Skeleton code: edit the file right there; code wrapped in block markers becomes a block.
+  const file = files.find((f) => f.path === path);
+  if (!editable(file)) return toast("This file is written from your settings and parameters; it can't be edited here.");
+  const hooksBefore = (file!.hooks ?? []).filter((h) => h.at <= i).length;
+  startEditing(i + hooksBefore + 1);
+  toast("Type your code below this line between // @block name and // @end name, then Save as blocks.");
+}
+
+/** Adds a block file to My blocks (Open or Import). */
+function importBlockFile(name: string, text: string): void {
+  const { block, diagnostics } = parseBlock(text);
+  const error = diagnostics.find((d) => d.level === "error");
+  if (!block || error) return toast(`${name}: ${error ? `line ${error.line}: ${error.message}` : "not a block file."}`);
+  if (library[block.id] !== undefined && library[block.id] !== text) {
+    if (!window.confirm(`My blocks already has a block "${block.id}". Replace it with ${name}?`)) return;
+  }
+  library[block.id] = text;
+  saveLibrary();
+  if (block.id in project) setProject({ ...project, [block.id]: text });
+  updateCustomBlocks();
+  refresh();
+  toast(`${block.label} is now in My blocks`);
+}
+
+// Editing code ----------------------------------------------------------------
+
+/** Every parameter constant of the project (params.rs), for completion. */
+function projectParams(): { name: string; type: string }[] {
+  const src = files.find((f) => f.path === "src/params.rs")?.contents ?? "";
+  return [...src.matchAll(/pub const ([A-Z][A-Z0-9_]*): ([^=]+?) =/g)].map((m) => ({ name: m[1]!, type: m[2]! }));
+}
+
+const editorEl = $("code-editor");
+const codeErrorsEl = $<HTMLUListElement>("code-errors");
+const codeHintEl = $("code-hint");
+const editBtn = $<HTMLButtonElement>("edit-code");
+const saveCodeBtn = $<HTMLButtonElement>("save-code");
+const cancelCodeBtn = $<HTMLButtonElement>("cancel-code");
+const formatCodeBtn = $<HTMLButtonElement>("format-code");
+const HINT = "Double-click a line to edit its block";
+const EDIT_HINT = "New code goes between // @block name and // @end name";
+
+interface Editing {
+  /** The project as it was when editing started. */
+  ws: Workspace;
+  files: GeneratedFile[];
+  /** Edited text per file, hook lines included. */
+  drafts: Map<string, string>;
+  path: string;
+  editor: CodeEditor;
+}
+
+let editing: Editing | null = null;
+
+/** Files whose code can be edited here: templates and files blocks add. */
+const editable = (f: GeneratedFile | undefined) => !!f?.origins;
+const viewText = (f: GeneratedFile) => viewOf(f).lines.join("\n");
+
+function startEditing(line?: number): void {
+  const file = files.find((f) => f.path === activeFile);
+  if (!current || !editable(file)) {
+    return toast(`${activeFile} is written from your settings and parameters; it can't be edited here.`);
+  }
+  if (codeEl.classList.contains("stale")) return toast("Fix the problems under Status first.");
+  if (tour) endTour();
+  const snapshotFiles = files;
+  editorEl.hidden = false;
+  codeEl.hidden = true;
+  const editor = createCodeEditor(editorEl, viewText(file!), saveCode, projectParams, line);
+  editing = { ws: structuredClone(current), files: snapshotFiles, drafts: new Map(), path: activeFile, editor };
+  editBtn.hidden = true;
+  saveCodeBtn.hidden = false;
+  cancelCodeBtn.hidden = false;
+  formatCodeBtn.hidden = false;
+  codeHintEl.textContent = EDIT_HINT;
+  codeHintEl.classList.add("editing");
+  renderTree();
+}
+
+/** Keeps the current file's text and opens another file in the editor. */
+function stash(): void {
+  if (!editing) return;
+  const file = editing.files.find((f) => f.path === editing!.path)!;
+  const text = editing.editor.text();
+  if (text.replace(/\s+$/, "") !== viewText(file).replace(/\s+$/, "")) editing.drafts.set(editing.path, text);
+  else editing.drafts.delete(editing.path);
+}
+
+function editFile(path: string, line?: number): void {
+  if (!editing) return showFile(path);
+  const file = editing.files.find((f) => f.path === path);
+  if (!editable(file)) return toast(`${path} is written from your settings and parameters; it can't be edited here.`);
+  stash();
+  editing.path = path;
+  activeFile = path;
+  pathEl.textContent = path;
+  editing.editor.setText(editing.drafts.get(path) ?? viewText(file!), line);
+  renderTree();
+}
+
+function stopEditing(): void {
+  if (!editing) return;
+  editing.editor.destroy();
+  editing = null;
+  editorEl.hidden = true;
+  editorEl.replaceChildren();
+  codeEl.hidden = false;
+  codeErrorsEl.hidden = true;
+  editBtn.hidden = false;
+  saveCodeBtn.hidden = true;
+  cancelCodeBtn.hidden = true;
+  formatCodeBtn.hidden = true;
+  codeHintEl.textContent = HINT;
+  codeHintEl.classList.remove("editing");
+  showFile(activeFile);
+}
+
+function showCodeErrors(errors: { path: string; line: number; message: string }[]): void {
+  codeErrorsEl.replaceChildren();
+  const close = el("button", "code-errors-x", "×");
+  close.type = "button";
+  close.title = "Close";
+  close.setAttribute("aria-label", "Close the error list");
+  close.addEventListener("click", () => (codeErrorsEl.hidden = true));
+  codeErrorsEl.append(close);
+  for (const e of errors) {
+    const li = el("li");
+    li.append(el("code", undefined, `${e.path}${e.line ? `:${e.line}` : ""}`), ` ${e.message}`);
+    li.addEventListener("click", () => {
+      if (e.path.startsWith("blocks/")) return;
+      if (editing && e.path !== editing.path) editFile(e.path, e.line);
+      else editing?.editor.goToLine(e.line);
+    });
+    codeErrorsEl.append(li);
+  }
+  codeErrorsEl.hidden = errors.length === 0;
+}
+
+/** Save as blocks: the edits become block files, placed in the engine. */
+function saveCode(): void {
+  if (!editing) return;
+  stash();
+  const ed = editing;
+  if (ed.drafts.size === 0) {
+    stopEditing();
+    return toast("Nothing changed.");
+  }
+  // Blocks changed on the canvas while editing: the edited files no longer match.
+  const changed = [...ed.drafts.keys()].some(
+    (p) => ed.files.find((f) => f.path === p)?.contents !== files.find((f) => f.path === p)?.contents,
+  );
+  if (changed) {
+    return showCodeErrors([{ path: ed.path, line: 0, message: "Your blocks changed while you were editing. Copy your code, cancel, and edit again." }]);
+  }
+  const taken = allIds().filter((id) => !(id in project));
+  const r = codeToBlocks(ed.ws, ed.files, [...ed.drafts].map(([path, text]) => ({ path, text })), taken);
+  if (r.errors.length) return showCodeErrors(r.errors);
+
+  stopEditing();
+  applyCodeResult(r, "Code saved as blocks");
+}
+
+/** Puts the blocks made from edited code into My blocks, the project and the canvas. */
+function applyCodeResult(r: CodeResult, title: string): void {
+  for (const [id, src] of Object.entries(r.sources)) library[id] = src;
+  saveLibrary();
+  setProject({ ...project, ...r.sources });
+  updateCustomBlocks();
+  const blocksBySlot = new Map(r.created.map((c) => [c.id, c.slot]));
+  let unplaced = 0;
+  rebuild((blocks) => {
+    for (const root of blocks) {
+      walk(root, (b) => {
+        const fork = r.forks.find((f) => builtinOf({ type: b.type } as Blockly.Block) === f.base);
+        if (!fork) return;
+        const spec = searchSpec(fork.base) ?? evalSpec(fork.base);
+        const block = parseBlock(r.sources[fork.id]!).block!;
+        b.fields = mapFields(b.fields, spec?.params ?? [], block.params) as State["fields"];
+        b.type = customType(fork.id);
+      });
+    }
+    for (const [id, slot] of blocksBySlot) if (!appendToSlot(blocks, slot, { type: customType(id) })) unplaced++;
+  });
+  const names = [
+    ...r.created.map((c) => `${c.id} (new, in ${c.slot})`),
+    ...r.forks.map((f) => `${f.id} (your version of ${f.base})`),
+    ...Object.keys(r.sources).filter((id) => !blocksBySlot.has(id) && !r.forks.some((f) => f.id === id)),
+  ];
+  pendingTour = { title, keys: Object.keys(r.sources) };
+  refresh();
+  save();
+  const params = r.created.some((c) => parseBlock(r.sources[c.id]!).block?.params.length);
+  toast(
+    `Saved: ${names.join(", ")}.${params ? " New parameters start at 1: set them on the block." : ""}${unplaced ? " Drag new blocks from My blocks into your engine." : ""}`,
+  );
+}
+
+editBtn.addEventListener("click", () => startEditing());
+saveCodeBtn.addEventListener("click", saveCode);
+formatCodeBtn.addEventListener("click", () => editing?.editor.format());
+cancelCodeBtn.addEventListener("click", () => {
+  stash();
+  if (editing?.drafts.size && !window.confirm("Throw away your code changes?")) return;
+  stopEditing();
+});
+
+// Linked folder -----------------------------------------------------------------
+
+const linkBtn = $<HTMLButtonElement>("link-folder");
+const folderStatusEl = $("folder-status");
+let folder: FolderSync | null = null;
+
+function folderStatus(text: string, level: "ok" | "busy" | "error"): void {
+  folderStatusEl.hidden = false;
+  folderStatusEl.textContent = text;
+  folderStatusEl.className = `folder-status ${level}`;
+}
+
+async function linkFolder(handle: FileSystemDirectoryHandle): Promise<void> {
+  folder?.stop();
+  folder = new FolderSync(handle, {
+    files: () => (codeEl.classList.contains("stale") ? null : files),
+    applyCode: (edits, base) => {
+      if (!current) return [{ path: edits[0]!.path, line: 0, message: "Add an Engine block first." }];
+      const stale = edits.some((e) => base.find((f) => f.path === e.path)?.contents !== files.find((f) => f.path === e.path)?.contents);
+      if (stale) return [{ path: edits[0]!.path, line: 0, message: "Your blocks changed in the app at the same time; save the file again." }];
+      const taken = allIds().filter((id) => !(id in project));
+      const r = codeToBlocks(structuredClone(current), base, edits, taken);
+      if (r.errors.length) return r.errors;
+      applyCodeResult(r, `Changes from ${edits.map((e) => e.path).join(", ")}`);
+      return [];
+    },
+    applyBlockFile: (id, text) => saveBlockSource(text, { originalId: id }),
+    status: folderStatus,
+    errors: (list) => (list.length ? showCodeErrors(list) : (codeErrorsEl.hidden = true)),
+  });
+  await folder.writeOut();
+  folder.start();
+  await rememberFolder(handle);
+  linkBtn.textContent = "Unlink folder";
+  linkBtn.title = `Stop syncing with ${handle.name}`;
+  toast(`Linked to ${handle.name}: open that folder in VS Code. Saved edits come back here as blocks.`);
+}
+
+function unlinkFolder(): void {
+  folder?.stop();
+  folder = null;
+  void rememberFolder(null);
+  folderStatusEl.hidden = true;
+  linkBtn.textContent = "Link folder";
+  linkBtn.title = "Write the project into a folder on your computer and keep it in sync, to edit it in VS Code or any editor";
+}
+
+type PickerWindow = Window & { showDirectoryPicker(o?: { mode?: string; id?: string }): Promise<FileSystemDirectoryHandle> };
+type PermissionHandle = FileSystemDirectoryHandle & { requestPermission(o: { mode: string }): Promise<PermissionState> };
+
+if (canLinkFolders()) {
+  linkBtn.hidden = false;
+  let remembered: FileSystemDirectoryHandle | null = null;
+  void rememberedFolder().then((h) => {
+    if (h && !folder) {
+      remembered = h;
+      linkBtn.textContent = `Reconnect ${h.name}`;
+    }
+  });
+  linkBtn.addEventListener("click", async () => {
+    if (folder) {
+      if (window.confirm(`Stop syncing with ${folder.name}? The files stay where they are.`)) unlinkFolder();
+      return;
+    }
+    try {
+      if (remembered) {
+        const h = remembered as PermissionHandle;
+        remembered = null;
+        if ((await h.requestPermission({ mode: "readwrite" })) === "granted") return void (await linkFolder(h));
+      }
+      const handle = await (window as unknown as PickerWindow).showDirectoryPicker({ mode: "readwrite", id: "cfs-project" });
+      let hasWorkspace = false;
+      let empty = true;
+      for await (const name of (handle as unknown as { keys(): AsyncIterable<string> }).keys()) {
+        empty = false;
+        if (name === "workspace.json") hasWorkspace = true;
+      }
+      if (!empty && !hasWorkspace && !window.confirm(`${handle.name} is not empty. Write the project into it? Files with the same names are replaced.`)) return;
+      await linkFolder(handle);
+    } catch (err) {
+      if ((err as Error).name !== "AbortError") toast(err instanceof Error ? err.message : "Could not link the folder.");
+    }
+  });
+}
+
+// For automated tests: link a folder handle without the picker (e.g. the origin private file system).
+Object.assign(window, { __cfsLinkFolder: (h: FileSystemDirectoryHandle) => linkFolder(h) });
+
 // Persistence ---------------------------------------------------------------
 
 function save(): void {
+  void folder?.writeOut();
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(Blockly.serialization.workspaces.save(bw)));
   } catch {
@@ -596,28 +1356,68 @@ $<HTMLSelectElement>("template").addEventListener("change", (e) => {
   select.value = "";
   if (!make) return;
   if (bw.getAllBlocks(false).length > 0 && !window.confirm("Replace the current workspace?")) return;
+  setProject({});
   load(make());
   toast("New engine created");
 });
 
 $("open").addEventListener("click", () => fileInput.click());
 
+/** Reads a `.cfs` project bundle: workspace.json plus blocks/*.block.rs. */
+function readBundle(data: Uint8Array): Workspace {
+  const entries = unzipSync(data);
+  const strip = (p: string) => p.replace(/^[^/]+\/(?=workspace\.json$|blocks\/)/, "");
+  const files = new Map(Object.entries(entries).map(([p, d]) => [strip(p), d]));
+  const json = files.get("workspace.json");
+  if (!json) throw new Error("This bundle has no workspace.json.");
+  const ws = parseWorkspaceFile(strFromU8(json));
+  // Block files in blocks/ win: they may have been edited outside the app.
+  for (const [p, d] of files) {
+    const m = /^blocks\/([a-z][a-z0-9_]*)\.block\.rs$/.exec(p);
+    if (m) ws.customBlocks![m[1]!] = strFromU8(d);
+  }
+  return ws;
+}
+
+/** Opens a workspace: its blocks join the project, and My blocks when new there. */
+function openWorkspace(ws: Workspace, name: string): void {
+  let added = 0;
+  for (const [id, src] of Object.entries(ws.customBlocks ?? {})) {
+    if (library[id] === undefined) {
+      library[id] = src;
+      added++;
+    }
+  }
+  if (added) saveLibrary();
+  setProject(ws.customBlocks ?? {});
+  updateCustomBlocks();
+  load(ws);
+  toast(`Opened ${name}${added ? `; ${added} block${added > 1 ? "s" : ""} added to My blocks` : ""}`);
+}
+
 fileInput.addEventListener("change", async () => {
   const file = fileInput.files?.[0];
   fileInput.value = "";
   if (!file) return;
   try {
-    load(parseWorkspaceFile(await file.text()));
-    toast(`Opened ${file.name}`);
+    if (file.name.endsWith(".rs")) importBlockFile(file.name, await file.text());
+    else if (/\.(cfs|zip)$/i.test(file.name)) openWorkspace(readBundle(new Uint8Array(await file.arrayBuffer())), file.name);
+    else openWorkspace(parseWorkspaceFile(await file.text()), file.name);
   } catch (err) {
     toast(err instanceof Error ? err.message : "Could not open that file.");
   }
 });
 
 $("save").addEventListener("click", () => {
-  const { workspace } = readWorkspace(bw);
+  const { workspace } = readWorkspace(bw, sourceOf);
   if (!workspace) return toast("Add an Engine block first.");
-  download("workspace.json", `${JSON.stringify(workspace, null, 2)}\n`, "application/json");
+  const name = toCrateName(workspace.engine.name);
+  const entries: Record<string, Uint8Array> = {
+    "workspace.json": strToU8(`${JSON.stringify(workspace, null, 2)}\n`),
+  };
+  for (const [id, src] of Object.entries(workspace.customBlocks ?? {})) entries[`blocks/${id}.block.rs`] = strToU8(src);
+  download(`${name}.cfs`, zipSync(entries, { level: 6 }), "application/zip");
+  toast(`Saved ${name}.cfs`);
 });
 
 exportBtn.addEventListener("click", () => {
@@ -642,6 +1442,7 @@ $("copy").addEventListener("click", async () => {
 
 // Start ---------------------------------------------------------------------
 
+updateCustomBlocks();
 if (restore()) {
   showEngineTop();
   refresh();

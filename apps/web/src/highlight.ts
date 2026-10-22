@@ -23,7 +23,7 @@ function highlightLine(line: string): string {
     out += escape(line.slice(last, m.index));
     const [text, comment, string, number, ident, attr] = m;
     if (comment) {
-      const marker = /^\/\/ @(block|end|else)\b/.test(comment.trim());
+      const marker = /^\/\/ @(block|end|else|region|insert|file)\b/.test(comment.trim());
       out += `<span class="${marker ? "tk-marker" : "tk-comment"}">${escape(text)}</span>`;
     } else if (string) out += `<span class="tk-string">${escape(text)}</span>`;
     else if (number) out += `<span class="tk-number">${text}</span>`;
@@ -50,9 +50,23 @@ export interface Removed {
  * to line i (focus, tour highlights); `removed` inserts unnumbered deleted
  * lines above the line where they used to be.
  */
-export function renderCode(source: string, extra: string[] = [], removed: Removed[] = []): string {
+/** Lines shown but not part of the file (hooks), just above line `at`. */
+export interface Ghost {
+  at: number;
+  text: string;
+  title: string;
+}
+
+const attr = (s: string) => escape(s).replace(/"/g, "&quot;");
+
+export function renderCode(source: string, extra: string[] = [], removed: Removed[] = [], ghosts: Ghost[] = []): string {
   const src = source.replace(/\n$/, "").split("\n");
   const before = new Map<number, string>();
+  for (const g of ghosts) {
+    const at = Math.min(g.at, src.length);
+    const html = `<div class="ln hook" title="${attr(g.title)}">${escape(g.text)}</div>`;
+    before.set(at, (before.get(at) ?? "") + html);
+  }
   for (const r of removed) {
     const cls = r.current ? "ln removed current" : "ln removed";
     const html = r.lines.map((l) => `<div class="${cls}">${highlightLine(l) || " "}</div>`).join("");

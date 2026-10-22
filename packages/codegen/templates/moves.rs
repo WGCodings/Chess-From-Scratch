@@ -4,9 +4,9 @@ use cozy_chess::{Board, Move, Square};
 
 use crate::score::MAX_PLY;
 
-// @block mvv_lva|quiescence|killers|history|late_move_reductions
+// @block mvv_lva|quiescence|killers|history|late_move_reductions|use_is_capture|use_quiet
 use cozy_chess::Piece;
-// @end mvv_lva|quiescence|killers|history|late_move_reductions
+// @end mvv_lva|quiescence|killers|history|late_move_reductions|use_is_capture|use_quiet
 
 /// Maximum number of legal moves in any chess position.
 pub const MAX_MOVES: usize = 218;
@@ -15,9 +15,9 @@ pub const MAX_MOVES: usize = 218;
 /// ordered).
 pub struct MoveList {
     moves: [Move; MAX_MOVES],
-    // @block tt_move_ordering|mvv_lva|killers|history|quiescence
+    // @block tt_move_ordering|mvv_lva|killers|history|quiescence|slot_ordering
     scores: [i32; MAX_MOVES],
-    // @end tt_move_ordering|mvv_lva|killers|history|quiescence
+    // @end tt_move_ordering|mvv_lva|killers|history|quiescence|slot_ordering
     len: usize,
 }
 
@@ -36,9 +36,9 @@ impl MoveList {
         };
         Self {
             moves: [NULL; MAX_MOVES],
-            // @block tt_move_ordering|mvv_lva|killers|history|quiescence
+            // @block tt_move_ordering|mvv_lva|killers|history|quiescence|slot_ordering
             scores: [0; MAX_MOVES],
-            // @end tt_move_ordering|mvv_lva|killers|history|quiescence
+            // @end tt_move_ordering|mvv_lva|killers|history|quiescence|slot_ordering
             len: 0,
         }
     }
@@ -76,9 +76,9 @@ impl MoveList {
     #[inline]
     pub fn push(&mut self, mv: Move) {
         self.moves[self.len] = mv;
-        // @block tt_move_ordering|mvv_lva|killers|history|quiescence
+        // @block tt_move_ordering|mvv_lva|killers|history|quiescence|slot_ordering
         self.scores[self.len] = 0;
-        // @end tt_move_ordering|mvv_lva|killers|history|quiescence
+        // @end tt_move_ordering|mvv_lva|killers|history|quiescence|slot_ordering
         self.len += 1;
     }
 
@@ -97,7 +97,7 @@ impl MoveList {
         self.moves[i]
     }
 
-    // @block tt_move_ordering|mvv_lva|killers|history|quiescence
+    // @block tt_move_ordering|mvv_lva|killers|history|quiescence|slot_ordering
     #[inline]
     pub fn set_score(&mut self, i: usize, score: i32) {
         self.scores[i] = score;
@@ -117,10 +117,10 @@ impl MoveList {
         self.scores.swap(i, best);
         self.moves[i]
     }
-    // @end tt_move_ordering|mvv_lva|killers|history|quiescence
+    // @end tt_move_ordering|mvv_lva|killers|history|quiescence|slot_ordering
 }
 
-// @block mvv_lva|quiescence|killers|history|late_move_reductions
+// @block mvv_lva|quiescence|killers|history|late_move_reductions|use_is_capture|use_quiet
 #[inline]
 fn is_en_passant(board: &Board, mv: Move) -> bool {
     board.piece_on(mv.from) == Some(Piece::Pawn)
@@ -133,15 +133,15 @@ fn is_en_passant(board: &Board, mv: Move) -> bool {
 pub fn is_capture(board: &Board, mv: Move) -> bool {
     board.colors(!board.side_to_move()).has(mv.to) || is_en_passant(board, mv)
 }
-// @end mvv_lva|quiescence|killers|history|late_move_reductions
+// @end mvv_lva|quiescence|killers|history|late_move_reductions|use_is_capture|use_quiet
 
-// @block killers|history|late_move_reductions
+// @block killers|history|late_move_reductions|use_quiet
 /// True for moves that are neither captures nor promotions.
 #[inline]
 pub fn is_quiet(board: &Board, mv: Move) -> bool {
     mv.promotion.is_none() && !is_capture(board, mv)
 }
-// @end killers|history|late_move_reductions
+// @end killers|history|late_move_reductions|use_quiet
 
 /// Triangular principal-variation table.
 pub struct PvTable {

@@ -12,6 +12,7 @@ import {
   BASIC_TIME,
   TIME_MANAGEMENT,
   TRANSPOSITION_TABLE,
+  type BlockFile,
   type EvalTermType,
   type ParamSpec,
   type SearchBlockType,
@@ -29,12 +30,16 @@ export const TT = "cfs_transposition_table";
 
 export const searchType = (t: SearchBlockType) => `cfs_search_${t}`;
 export const evalType = (t: EvalTermType) => `cfs_eval_${t}`;
+/** Blockly type of a custom block (forks and new blocks). */
+export const customType = (id: string) => `cfs_custom_${id}`;
+export const CUSTOM_PREFIX = "cfs_custom_";
 
 /** Statement input name for each search slot on the negamax block. */
 export const SLOT_INPUT: Record<SearchSlot, string> = {
   root: "ROOT",
   pruning: "PRUNING",
   ordering: "ORDERING",
+  extensions: "EXTENSIONS",
   move_loop: "MOVE_LOOP",
   reductions: "REDUCTIONS",
   leaf: "LEAF",
@@ -44,6 +49,7 @@ const SLOT_LABEL: Record<SearchSlot, string> = {
   root: "at the root",
   pruning: "before the move loop",
   ordering: "order moves by",
+  extensions: "extend moves",
   move_loop: "move loop",
   reductions: "reduce late moves",
   leaf: "at depth 0",
@@ -58,6 +64,7 @@ export const COLOURS = {
   root: "#3f8f7a",
   pruning: "#c76b2e",
   ordering: "#3d73b8",
+  extensions: "#b8564a",
   move_loop: "#7a5bb5",
   reductions: "#9a4fa0",
   leaf: "#2c8a9a",
@@ -249,6 +256,21 @@ export function defineBlocks(): void {
   Blockly.common.defineBlocksWithJsonArray(defs);
 }
 
+/** Defines (or redefines) the Blockly type of a custom block. */
+export function defineCustomBlock(b: BlockFile): string {
+  const type = customType(b.id);
+  const slot = b.slot === "eval" ? null : b.slot;
+  const def = paramBlock(type, `✎ ${b.label}`, b.params, {
+    previousStatement: slot ? `slot_${slot}` : "eval_term",
+    nextStatement: slot ? `slot_${slot}` : "eval_term",
+    colour: slot ? COLOURS[slot] : COLOURS.evalTerm,
+    tooltip: `${b.description || "Your own block."}${b.requires.length ? ` Needs ${b.requires.join(" and ")}.` : ""} Right-click > Edit this block to change its code.`,
+  });
+  delete Blockly.Blocks[type];
+  Blockly.common.defineBlocksWithJsonArray([def]);
+  return type;
+}
+
 /** Every CFS block may appear at most once. */
 export function maxInstances(): Record<string, number> {
   const types = [
@@ -271,7 +293,16 @@ const blocksIn = (slot: SearchSlot) =>
     .filter((t) => SEARCH_BLOCKS[t].slot === slot)
     .map((t) => ({ kind: "block", type: searchType(t) }));
 
-export function toolbox(): Blockly.utils.toolbox.ToolboxDefinition {
+/** Entries of the My blocks category. */
+export interface ToolboxCustom {
+  id: string;
+  group: "project" | "library" | "example";
+}
+
+export const NEW_BLOCK_BUTTON = "cfsNewBlock";
+export const IMPORT_BLOCK_BUTTON = "cfsImportBlock";
+
+export function toolbox(custom: ToolboxCustom[] = []): Blockly.utils.toolbox.ToolboxDefinition {
   const category = (name: string, colour: string, contents: object[]) => ({
     kind: "category",
     name,
@@ -296,6 +327,19 @@ export function toolbox(): Blockly.utils.toolbox.ToolboxDefinition {
         { kind: "block", type: HCE },
         ...(Object.keys(EVAL_TERMS) as EvalTermType[]).map((t) => ({ kind: "block", type: evalType(t) })),
       ]),
+      category("My blocks", "#5c5c5c", [
+        { kind: "button", text: "New block…", callbackKey: NEW_BLOCK_BUTTON },
+        { kind: "button", text: "Import block file…", callbackKey: IMPORT_BLOCK_BUTTON },
+        ...customGroup(custom, "project", "In this project"),
+        ...customGroup(custom, "library", "Saved in your browser"),
+        ...customGroup(custom, "example", "Examples"),
+      ]),
     ],
   } as Blockly.utils.toolbox.ToolboxDefinition;
+}
+
+function customGroup(custom: ToolboxCustom[], group: ToolboxCustom["group"], title: string): object[] {
+  const items = custom.filter((c) => c.group === group);
+  if (items.length === 0) return [];
+  return [{ kind: "label", text: title }, ...items.map((c) => ({ kind: "block", type: customType(c.id) }))];
 }
