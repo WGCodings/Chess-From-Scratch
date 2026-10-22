@@ -2,11 +2,12 @@
 
 #![allow(dead_code, unused_imports)]
 
-use cfs_runtime::eval::S;
+use crate::eval::S;
 
 // @block engine
 pub const ENGINE_NAME: &str = "CFS Reference";
 pub const ENGINE_AUTHOR: &str = "WG";
+pub const ENGINE_BENCH_DEPTH: i32 = 5;
 // @end engine
 
 // @block time_management

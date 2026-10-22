@@ -1,11 +1,24 @@
 :root {
-  --bg: #f6f5f2;
-  --panel: #ffffff;
-  --ink: #1d1d1b;
-  --muted: #6b6a66;
-  --line: #e2e0da;
+  --bg: #f4f2ec;
+  --panel: #fbfaf7;
+  --panel-2: #ffffff;
+  --ink: #23231f;
+  --muted: #6d6a62;
+  --line: #e2ded4;
   --accent: #2f6f4f;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --accent-ink: #ffffff;
+  --error: #b3261e;
+  --error-bg: #fbebeb;
+  --warn: #8a5a00;
+  --warn-bg: #f9eeda;
+  --ok: #2f6f4f;
+  --ok-bg: #e5f4e4;
+  --code-bg: #1f2420;
+  --code-ink: #e4e6df;
+  --code-dim: #8b9187;
+  --focus-bg: rgba(126, 200, 152, 0.16);
+  --focus-bar: #7ec898;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color: var(--ink);
   background: var(--bg);
 }
@@ -20,64 +33,330 @@ body {
   display: flex;
   flex-direction: column;
   background: var(--bg);
+  overflow: hidden;
 }
+
+/* Top bar --------------------------------------------------------------- */
 
 .topbar {
   display: flex;
-  align-items: baseline;
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 16px;
   background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .logo {
   font-weight: 700;
-  color: var(--accent);
+  font-size: 15px;
+  letter-spacing: 0.01em;
 }
 
-.tag {
-  font-size: 13px;
-  color: var(--muted);
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
+
+.btn {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.btn:hover {
+  border-color: #c9c3b6;
+}
+
+.btn:focus-visible,
+select:focus-visible,
+.tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.btn.primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn.small {
+  padding: 3px 8px;
+  font-size: 12px;
+  background: transparent;
+  color: var(--code-dim);
+  border-color: #3a4139;
+}
+
+.select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.select select {
+  font: inherit;
+  font-weight: 500;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--ink);
+}
+
+/* Layout ---------------------------------------------------------------- */
 
 .layout {
   flex: 1;
-  display: grid;
-  grid-template-columns: 1fr 380px;
   min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 42%);
 }
 
 .workspace {
+  min-width: 0;
   min-height: 0;
 }
 
-.preview {
+.side {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   border-left: 1px solid var(--line);
-  background: var(--panel);
-  padding: 16px;
-  overflow: auto;
+  background: var(--code-bg);
 }
 
-.preview h2 {
-  margin: 0 0 12px;
-  font-size: 14px;
+/* Tabs and code --------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px 0;
+  background: #181c19;
+  overflow-x: auto;
+}
+
+.tab {
+  font: inherit;
+  font-size: 12px;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  padding: 7px 12px;
+  border: none;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--code-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tab[aria-selected="true"] {
+  background: var(--code-bg);
+  color: var(--code-ink);
+}
+
+.code-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.code-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid #2c322d;
+}
+
+.code-path {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  color: var(--code-dim);
+}
+
+.code {
+  flex: 1;
+  margin: 0;
+  overflow: auto;
+  padding: 10px 0 24px;
+  color: var(--code-ink);
+  font: 12.5px/1.55 ui-monospace, "Cascadia Code", Consolas, monospace;
+  counter-reset: ln;
+}
+
+.code.stale {
+  opacity: 0.45;
+}
+
+.ln {
+  padding: 0 14px 0 52px;
+  position: relative;
+  white-space: pre;
+  border-left: 3px solid transparent;
+}
+
+.ln::before {
+  counter-increment: ln;
+  content: counter(ln);
+  position: absolute;
+  left: 0;
+  width: 38px;
+  text-align: right;
+  color: #555c54;
+}
+
+.ln.focus {
+  background: var(--focus-bg);
+  border-left-color: var(--focus-bar);
+}
+
+.tk-comment {
+  color: #8b9187;
+  font-style: italic;
+}
+.tk-marker {
+  color: #7ec898;
+  font-weight: 600;
+}
+.tk-keyword {
+  color: #e59a6a;
+}
+.tk-string {
+  color: #c3d68c;
+}
+.tk-number {
+  color: #d9b8f0;
+}
+.tk-type {
+  color: #8cc4e8;
+}
+.tk-const {
+  color: #f0c674;
+}
+.tk-attr {
+  color: #8b9187;
+}
+
+/* Issues ---------------------------------------------------------------- */
+
+.issues {
+  max-height: 32%;
+  overflow: auto;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  padding: 10px 14px 12px;
+}
+
+.issues h2 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: var(--muted);
 }
 
-.preview pre {
+.issues ul {
+  list-style: none;
   margin: 0;
-  font: 13px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace;
-  white-space: pre-wrap;
+  padding: 0;
+  display: grid;
+  gap: 6px;
 }
 
-@media (max-width: 800px) {
+.issues li {
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 7px 10px;
+  border-radius: 8px;
+}
+
+.issues li.error {
+  background: var(--error-bg);
+  color: var(--error);
+}
+.issues li.warning {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+.issues li.ok {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+/* Toast ----------------------------------------------------------------- */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translate(-50%, 20px);
+  background: var(--ink);
+  color: #fff;
+  font-size: 13px;
+  padding: 9px 14px;
+  border-radius: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.2s,
+    transform 0.2s;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* Blockly tweaks -------------------------------------------------------- */
+
+.blocklyToolboxDiv {
+  border-right: 1px solid var(--line);
+}
+
+.blocklyTreeLabel {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif !important;
+  font-weight: 600;
+}
+
+/* Small screens --------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  body {
+    overflow: auto;
+    height: auto;
+  }
   .layout {
     grid-template-columns: 1fr;
-    grid-template-rows: 1fr 40vh;
+    grid-template-rows: 70vh auto;
   }
-  .preview {
+  .side {
     border-left: none;
     border-top: 1px solid var(--line);
+    height: 80vh;
   }
 }

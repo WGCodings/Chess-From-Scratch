@@ -8,12 +8,12 @@ complete Cargo project that you compile and fully own.
 
 ```
 crates/
-  cfs-runtime/     MIT runtime shipped inside every exported engine (cozy-chess, UCI, TT, bench)
-  cfs-reference/   generator output for the "every block" workspace (golden file, bench 945193)
+  cfs-reference/   generator output for the "every block" workspace, with unit tests (bench 150455)
 packages/
   codegen/         block catalogue, workspace format, Rust templates and project generator
+    templates/     every line of Rust an engine can contain (search, eval, uci, tt, ...)
 apps/
-  web/             Blockly editor (Vite + TypeScript)
+  web/             Blockly editor (Vite + TypeScript): blocks, live Rust preview, export
 ```
 
 ## Requirements
@@ -25,14 +25,14 @@ apps/
 
 ```sh
 # Rust
-cargo test --release                            # perft, runtime unit tests, bench fingerprint
+cargo test --release                            # perft and unit tests for all template code
 cargo build --release -p cfs-reference          # the reference engine (UCI)
 ./target/release/cfs-reference bench            # deterministic node count + nps (OpenBench format)
 
 # Web
 npm install
 npm run dev        # editor at http://localhost:5173
-npm test           # codegen unit tests (includes: reference == generator output)
+npm test           # codegen + editor tests (reference == generator output, blocks round-trip)
 npm run build      # typecheck + production build
 
 # Code generator
@@ -59,10 +59,25 @@ A workspace (JSON, see `packages/codegen/src/workspace.ts`) lists the engine
 settings, the search blocks placed in each slot and the eval terms. The
 generator renders the Rust templates, keeping each placed block's region
 (with markers) and replacing missing ones with their `// @else` fallback,
-writes `params.rs` from the block catalogue, and vendors the runtime crate,
-producing a standalone Cargo project.
+and writes `params.rs` from the block catalogue. The result is one flat Cargo
+crate (only `cozy-chess` as a dependency) that contains only the code the
+placed blocks need: no TT block means no `tt.rs`, an unplaced eval term
+leaves no trace. `// @block a|b` marks helpers shared by several blocks.
+The unit tests in the templates (`// @block tests`) are kept only in the
+reference crate.
+
+## The editor
+
+Drag an Engine block, plug in a Negamax search and a Hand-crafted evaluation,
+then drop feature blocks into their slots. Blocks only fit where they belong
+(typed connections), each block appears once, and loose blocks are greyed out
+and ignored. The right panel shows the generated Rust live; selecting a block
+highlights its code. The status panel lists errors (which block export) and
+warnings. Work autosaves in the browser; Save/Open use the same
+`workspace.json` that every exported project contains. Export downloads the
+complete Cargo project as a zip.
 
 ## Status
 
-Sprint 2 (workspace model + code generator). See the MVP plan doc in the
+Sprint 3 (Blockly editor). See the MVP plan doc in the
 Claude project for scope and the sprint roadmap.

@@ -157,6 +157,7 @@ fn unpack_move(packed: u16) -> Option<Move> {
     })
 }
 
+// @block tests
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,7 +185,8 @@ mod tests {
 
     #[test]
     fn mate_score_adjustment() {
-        let s = crate::MATE - 10;
+        let s = crate::score::MATE - 10;
         assert_eq!(score_from_tt(score_to_tt(s, 4) as i16, 4), s);
     }
 }
+// @end tests

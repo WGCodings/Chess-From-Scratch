@@ -25,7 +25,7 @@ import {
 } from "../src/index";
 
 /** Must match `cfs-reference bench` (default depth). */
-const REFERENCE_BENCH = 945_193;
+const REFERENCE_BENCH = 150_455;
 
 function without(type: SearchBlockType | EvalTermType | "transposition_table"): Workspace {
   const ws = referenceWorkspace();

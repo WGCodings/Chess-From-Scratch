@@ -7,13 +7,15 @@
  *     ...optional fallback emitted (without markers) when it is not...
  *     // @end null_move_pruning
  *
- * Regions do not nest. The markers kept in the output let a future importer
- * map generated code back to blocks.
+ * `// @block a|b` marks helper code shared by several blocks: it is kept
+ * (without markers) when any of them is placed. Regions do not nest.
+ * The markers kept in the output let a future importer map generated code
+ * back to blocks.
  */
 
-const BLOCK = /^\s*\/\/ @block (\w+)\s*$/;
+const BLOCK = /^\s*\/\/ @block ([\w|]+)\s*$/;
 const ELSE = /^\s*\/\/ @else\s*$/;
-const END = /^\s*\/\/ @end (\w+)\s*$/;
+const END = /^\s*\/\/ @end ([\w|]+)\s*$/;
 
 export class TemplateError extends Error {}
 
@@ -25,6 +27,8 @@ export function renderTemplate(
 ): string {
   const out: string[] = [];
   let region: string | null = null;
+  let on = false;
+  let shared = false;
   let inElse = false;
   const lines = source.split("\n");
 
@@ -34,21 +38,26 @@ export function renderTemplate(
     const end = END.exec(line);
     if (block) {
       if (region) throw new TemplateError(`${where}: @block ${block[1]} inside ${region}`);
-      if (!known.has(block[1]!)) throw new TemplateError(`${where}: unknown block ${block[1]}`);
+      const names = block[1]!.split("|");
+      for (const n of names) {
+        if (!known.has(n)) throw new TemplateError(`${where}: unknown block ${n}`);
+      }
       region = block[1]!;
+      on = names.some((n) => enabled.has(n));
+      shared = names.length > 1;
       inElse = false;
-      if (enabled.has(region)) out.push(line);
+      if (on && !shared) out.push(line);
     } else if (ELSE.test(line)) {
       if (!region || inElse) throw new TemplateError(`${where}: stray @else`);
       inElse = true;
     } else if (end) {
       if (end[1] !== region) throw new TemplateError(`${where}: @end ${end[1]} does not close ${region}`);
-      if (enabled.has(region)) out.push(line);
+      if (on && !shared) out.push(line);
       region = null;
       inElse = false;
     } else if (!region) {
       out.push(line);
-    } else if (enabled.has(region) !== inElse) {
+    } else if (on !== inElse) {
       out.push(line);
     }
   });

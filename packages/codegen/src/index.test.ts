@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -44,6 +44,11 @@ describe("renderTemplate", () => {
   it("emits the fallback for disabled regions", () => {
     expect(renderTemplate(src, new Set(), known)).toBe(["x", "off", "y", ""].join("\n"));
   });
+  it("keeps a|b regions when either block is placed", () => {
+    const s = ["// @block a|b", "x", "// @end a|b", ""].join("\n");
+    expect(renderTemplate(s, new Set(["b"]), known)).toBe("x\n");
+    expect(renderTemplate(s, new Set(), known)).toBe("\n");
+  });
   it("collapses blank lines left by removed regions", () => {
     const s = ["x", "", "// @block b", "z", "// @end b", "", "y"].join("\n");
     expect(renderTemplate(s, new Set(), known)).toBe("x\n\ny\n");
@@ -86,19 +91,38 @@ describe("validate", () => {
 
 describe("generateProject", () => {
   it("reproduces the reference engine byte for byte", () => {
-    const files = generateProject(referenceWorkspace());
-    for (const name of ["main.rs", "search.rs", "eval.rs", "params.rs"]) {
-      const generated = files.find((f) => f.path === `src/${name}`)!.contents;
-      const reference = readFileSync(join(repo, "crates/cfs-reference/src", name), "utf8").replace(/\r\n/g, "\n");
-      expect(generated, `src/${name} differs; run npm run gen:reference`).toBe(reference);
+    const files = generateProject(referenceWorkspace(), { includeTests: true }).filter((f) =>
+      f.path.startsWith("src/"),
+    );
+    const dir = join(repo, "crates/cfs-reference/src");
+    expect(files.map((f) => f.path.slice(4)).sort()).toEqual(readdirSync(dir).sort());
+    for (const file of files) {
+      const reference = readFileSync(join(dir, file.path.slice(4)), "utf8").replace(/\r\n/g, "\n");
+      expect(file.contents, `${file.path} differs; run npm run gen:reference`).toBe(reference);
     }
   });
 
-  it("vendors the runtime crate", () => {
-    const paths = generateProject(starterWorkspace()).map((f) => f.path);
-    expect(paths).toContain("runtime/Cargo.toml");
-    expect(paths).toContain("runtime/src/lib.rs");
-    expect(paths).toContain("runtime/LICENSE");
+  it("is one crate containing only the code the blocks use", () => {
+    const files = generateProject(emptyWorkspace());
+    const paths = files.map((f) => f.path);
+    expect(paths.some((p) => p.startsWith("runtime/"))).toBe(false);
+    expect(paths).not.toContain("src/tt.rs");
+    const all = files.map((f) => f.contents).join("\n");
+    expect(all).not.toContain("#[cfg(test)]");
+    expect(all).not.toContain("struct Killers");
+    expect(all).not.toContain("fn bishop_pair");
+    expect(all).not.toContain("option name Hash");
+    expect(files.find((f) => f.path === "Cargo.toml")!.contents).toContain('cozy-chess = "0.3.4"');
+  });
+
+  it("puts placed blocks' code in the user's files", () => {
+    const files = generateProject(referenceWorkspace());
+    const file = (p: string) => files.find((f) => f.path === p)!.contents;
+    expect(file("src/eval.rs")).toContain("pub fn bishop_pair(");
+    expect(file("src/search.rs")).toContain("pub struct Killers");
+    expect(file("src/search.rs")).toContain("pub fn mvv_lva(");
+    expect(file("src/search.rs")).not.toContain("@block mvv_lva|quiescence");
+    expect(files.map((f) => f.path)).toContain("src/tt.rs");
   });
 
   it("drops disabled blocks and their parameters", () => {
@@ -130,6 +154,6 @@ describe("generateProject", () => {
   });
 
   it("only uses known regions", () => {
-    expect(enabledRegions(referenceWorkspace())).toEqual(new Set(KNOWN_REGIONS));
+    expect(enabledRegions(referenceWorkspace(), true)).toEqual(new Set(KNOWN_REGIONS));
   });
 });

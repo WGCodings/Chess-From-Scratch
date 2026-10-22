@@ -6,7 +6,9 @@ use cozy_chess::{Board, FenParseError, Move};
 #[derive(Clone)]
 struct Entry {
     board: Board,
+    // @block null_move_pruning
     null: bool,
+    // @end null_move_pruning
 }
 
 /// The current position and every position before it in the game and search.
@@ -24,7 +26,9 @@ impl Default for Position {
 impl Position {
     pub fn from_board(board: Board) -> Self {
         let mut stack = Vec::with_capacity(512);
+        // @block null_move_pruning
         stack.push(Entry { board, null: false });
+        // @end null_move_pruning
         Self { stack }
     }
 
@@ -47,9 +51,12 @@ impl Position {
     pub fn make_move(&mut self, mv: Move) {
         let mut board = self.board().clone();
         board.play_unchecked(mv);
+        // @block null_move_pruning
         self.stack.push(Entry { board, null: false });
+        // @end null_move_pruning
     }
 
+    // @block null_move_pruning
     /// Passes the turn. Returns false (and does nothing) when in check.
     #[inline]
     pub fn make_null(&mut self) -> bool {
@@ -61,6 +68,7 @@ impl Position {
             None => false,
         }
     }
+    // @end null_move_pruning
 
     /// Takes back the last move or null move.
     #[inline]
@@ -69,11 +77,13 @@ impl Position {
         self.stack.pop();
     }
 
+    // @block null_move_pruning
     /// True when the move that led here was a null move.
     #[inline]
     pub fn last_move_was_null(&self) -> bool {
         self.stack.last().is_some_and(|e| e.null)
     }
+    // @end null_move_pruning
 
     /// Fifty-move rule or a repetition of an earlier position.
     pub fn is_draw(&self) -> bool {
@@ -93,6 +103,7 @@ impl Position {
     }
 }
 
+// @block tests
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,3 +135,4 @@ mod tests {
         assert_eq!(pos.board().hash(), hash);
     }
 }
+// @end tests

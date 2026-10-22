@@ -66,6 +66,7 @@ pub fn print_info(board: &Board, info: &IterationInfo) {
     );
 }
 
+// @block tests
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,3 +79,4 @@ mod tests {
         assert_eq!(uci_score(35), "cp 35");
     }
 }
+// @end tests

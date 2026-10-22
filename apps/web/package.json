@@ -10,14 +10,18 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "pretypecheck": "npm run embed -w @cfs/codegen"
+    "pretypecheck": "npm run embed -w @cfs/codegen",
+    "pretest": "npm run embed -w @cfs/codegen",
+    "test": "vitest run"
   },
   "dependencies": {
     "@cfs/codegen": "^0.1.0",
-    "blockly": "^13.4.0"
+    "blockly": "^13.4.0",
+    "fflate": "^0.8.3"
   },
   "devDependencies": {
     "typescript": "^7.0.2",
-    "vite": "^8.3.5"
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
   }
 }

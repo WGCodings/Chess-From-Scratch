@@ -7,4 +7,4 @@ version.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-cfs-runtime.workspace = true
+cozy-chess.workspace = true

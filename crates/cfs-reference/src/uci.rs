@@ -25,12 +25,18 @@ pub struct SearchResult {
 pub trait Engine: Send + Sized + 'static {
     const NAME: &'static str;
     const AUTHOR: &'static str;
+    // @block transposition_table
     const DEFAULT_HASH_MB: usize = 16;
+    // @end transposition_table
+    /// Depth used by `bench` when no depth is given.
+    const BENCH_DEPTH: i32 = crate::bench::DEFAULT_DEPTH;
 
     fn new() -> Self;
     /// Forget everything learned (TT, history, killers).
     fn new_game(&mut self);
+    // @block transposition_table
     fn set_hash(&mut self, mb: usize);
+    // @end transposition_table
     fn time_params() -> TimeParams {
         TimeParams::default()
     }
@@ -70,10 +76,12 @@ pub fn run<E: Engine>() {
             "uci" => {
                 println!("id name {}", E::NAME);
                 println!("id author {}", E::AUTHOR);
+                // @block transposition_table
                 println!(
                     "option name Hash type spin default {} min 1 max 65536",
                     E::DEFAULT_HASH_MB
                 );
+                // @end transposition_table
                 println!("option name Threads type spin default 1 min 1 max 1");
                 println!("uciok");
             }
@@ -82,10 +90,12 @@ pub fn run<E: Engine>() {
                 wait(&mut thread, &mut engine);
                 engine.as_mut().unwrap().new_game();
             }
+            // @block transposition_table
             "setoption" => {
                 wait(&mut thread, &mut engine);
                 set_option::<E>(engine.as_mut().unwrap(), &tokens);
             }
+            // @end transposition_table
             "position" => {
                 wait(&mut thread, &mut engine);
                 match parse_position(&tokens) {
@@ -139,6 +149,7 @@ pub fn run<E: Engine>() {
     wait(&mut thread, &mut engine);
 }
 
+// @block transposition_table
 fn set_option<E: Engine>(engine: &mut E, tokens: &[&str]) {
     // setoption name <name...> value <value...>
     let name_at = tokens.iter().position(|&t| t == "name");
@@ -154,6 +165,7 @@ fn set_option<E: Engine>(engine: &mut E, tokens: &[&str]) {
         }
     }
 }
+// @end transposition_table
 
 /// Parses `position startpos|fen <fen> [moves ...]`.
 pub fn parse_position(tokens: &[&str]) -> Option<Position> {
@@ -178,6 +190,27 @@ pub fn parse_position(tokens: &[&str]) -> Option<Position> {
     Some(pos)
 }
 
+/// Counts leaf nodes of the legal move tree to `depth`.
+pub fn perft(board: &Board, depth: u32) -> u64 {
+    if depth == 0 {
+        return 1;
+    }
+    let mut nodes = 0;
+    board.generate_moves(|moves| {
+        if depth == 1 {
+            nodes += moves.len() as u64;
+        } else {
+            for mv in moves {
+                let mut child = board.clone();
+                child.play_unchecked(mv);
+                nodes += perft(&child, depth - 1);
+            }
+        }
+        false
+    });
+    nodes
+}
+
 fn first_legal_move(board: &Board) -> Option<Move> {
     let list = MoveList::all(board);
     (!list.is_empty()).then(|| list.get(0))
@@ -191,7 +224,7 @@ fn perft_divide(board: &Board, depth: u32) {
         let mv = list.get(i);
         let mut child = board.clone();
         child.play_unchecked(mv);
-        let n = crate::perft(&child, depth.saturating_sub(1));
+        let n = perft(&child, depth.saturating_sub(1));
         println!("{}: {n}", display_uci_move(board, mv));
         total += n;
     }
@@ -199,6 +232,7 @@ fn perft_divide(board: &Board, depth: u32) {
     println!("\nnodes {total} time {ms} nps {}", total * 1000 / ms);
 }
 
+// @block tests
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,4 +261,45 @@ mod tests {
         let tokens: Vec<&str> = "position startpos moves e2e5".split_whitespace().collect();
         assert!(parse_position(&tokens).is_none());
     }
+
+    #[test]
+    fn perft_startpos() {
+        let board = Board::default();
+        assert_eq!(perft(&board, 1), 20);
+        assert_eq!(perft(&board, 2), 400);
+        assert_eq!(perft(&board, 3), 8_902);
+        assert_eq!(perft(&board, 4), 197_281);
+    }
+
+    #[test]
+    fn perft_kiwipete() {
+        let board: Board = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1"
+            .parse()
+            .unwrap();
+        assert_eq!(perft(&board, 1), 48);
+        assert_eq!(perft(&board, 2), 2_039);
+        assert_eq!(perft(&board, 3), 97_862);
+    }
+
+    #[test]
+    fn perft_tricky_positions() {
+        let cases = [
+            ("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1", 5, 674_624),
+            (
+                "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+                4,
+                422_333,
+            ),
+            (
+                "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
+                4,
+                2_103_487,
+            ),
+        ];
+        for (fen, depth, expected) in cases {
+            let board: Board = fen.parse().unwrap();
+            assert_eq!(perft(&board, depth), expected, "{fen}");
+        }
+    }
 }
+// @end tests

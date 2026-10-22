@@ -11,7 +11,7 @@ import {
   type ParamValue,
   type Score,
 } from "./blocks";
-import { RUNTIME_SOURCES, RUNTIME_VERSION, TEMPLATES } from "./embedded.generated";
+import { TEMPLATES } from "./embedded.generated";
 import { renderTemplate } from "./template";
 import {
   KNOWN_REGIONS,
@@ -98,6 +98,7 @@ export function generateParams(ws: Workspace): string {
       "// @block engine",
       `pub const ENGINE_NAME: &str = ${rustString(ws.engine.name)};`,
       `pub const ENGINE_AUTHOR: &str = ${rustString(ws.engine.author)};`,
+      `pub const ENGINE_BENCH_DEPTH: i32 = ${ws.engine.benchDepth};`,
       "// @end engine",
     ].join("\n"),
   ];
@@ -128,27 +129,49 @@ export function generateParams(ws: Workspace): string {
     "",
     "#![allow(dead_code, unused_imports)]",
     "",
-    "use cfs_runtime::eval::S;",
+    "use crate::eval::S;",
     "",
     sections.join("\n\n"),
     "",
   ].join("\n");
 }
 
+/** Which template files a project needs; tt.rs only with a transposition table. */
+function templateFiles(ws: Workspace): (keyof typeof TEMPLATES)[] {
+  const files: (keyof typeof TEMPLATES)[] = ["search", "eval", "uci", "position", "time", "moves", "score", "bench"];
+  if (ws.engine.transpositionTable) files.push("tt");
+  return files;
+}
+
 export function generateMain(ws: Workspace): string {
+  const modules = ["params", ...templateFiles(ws)].sort();
   return [
     `// ${ws.engine.name.replace(/[\r\n]+/g, " ")}: built with Chess From Scratch.`,
     "//",
-    "// search.rs  the negamax skeleton and the search blocks you placed",
-    "// eval.rs    the evaluation terms you placed",
-    "// params.rs  every block parameter, ready to tune",
+    "// Your engine:",
+    "//   search.rs    the negamax skeleton and the search blocks you placed",
+    "//   eval.rs      the evaluation terms you placed",
+    "//   params.rs    every block parameter, ready to tune",
+    "//",
+    "// The machinery around it (yours to change too):",
+    "//   uci.rs       talks to chess GUIs (UCI protocol)",
+    "//   position.rs  the board plus history for repetition detection",
+    "//   time.rs      decides how long to think",
+    "//   moves.rs     move lists and the principal variation",
+    "//   score.rs     score constants and info output",
+    "//   bench.rs     the `bench` command",
+    ...(ws.engine.transpositionTable ? ["//   tt.rs        the transposition table"] : []),
     "",
-    "mod eval;",
-    "mod params;",
-    "mod search;",
+    ...modules.map((m) => `mod ${m};`),
     "",
     "fn main() {",
-    "    cfs_runtime::main::<search::Searcher>();",
+    "    let args: Vec<String> = std::env::args().skip(1).collect();",
+    '    if args.first().map(String::as_str) == Some("bench") {',
+    "        let depth = args.get(1).and_then(|d| d.parse().ok());",
+    "        bench::run::<search::Searcher>(depth);",
+    "    } else {",
+    "        uci::run::<search::Searcher>();",
+    "    }",
     "}",
     "",
   ].join("\n");
@@ -167,36 +190,13 @@ export function generateCargoToml(ws: Workspace): string {
     "[workspace]",
     "",
     "[dependencies]",
-    'cfs-runtime = { path = "runtime" }',
-    "",
-    "[features]",
-    "# Faster move generation on CPUs with fast BMI2 (Intel Haswell+, AMD Zen 3+).",
-    '# Build with: RUSTFLAGS="-C target-cpu=native" cargo build --release --features pext',
-    'pext = ["cfs-runtime/pext"]',
+    'cozy-chess = "0.3.4"',
     "",
     "[profile.release]",
     "opt-level = 3",
     'lto = "fat"',
     "codegen-units = 1",
     'panic = "abort"',
-    "",
-  ].join("\n");
-}
-
-function generateRuntimeCargoToml(): string {
-  return [
-    "[package]",
-    'name = "cfs-runtime"',
-    `version = "${RUNTIME_VERSION}"`,
-    'edition = "2021"',
-    'license = "MIT"',
-    'description = "Runtime library for engines built with Chess From Scratch."',
-    "",
-    "[dependencies]",
-    'cozy-chess = "0.3.4"',
-    "",
-    "[features]",
-    'pext = ["cozy-chess/pext"]',
     "",
   ].join("\n");
 }
@@ -219,11 +219,9 @@ cargo build --release
 The engine is \`target/release/${bin}\` (\`${bin}.exe\` on Windows). Load it
 into any UCI chess GUI, such as Cute Chess, Arena or En Croissant.
 
-For extra speed on modern CPUs:
-
-\`\`\`sh
-RUSTFLAGS="-C target-cpu=native" cargo build --release --features pext
-\`\`\`
+The build is tuned for your own CPU (\`.cargo/config.toml\` sets
+\`target-cpu=native\`). To make a binary that runs on other machines, delete
+that file before building.
 
 ## Bench
 
@@ -253,19 +251,32 @@ instance, which uses the \`bench\` command above.
 
 - \`src/search.rs\`, \`src/eval.rs\`, \`src/params.rs\`: your engine. Each block
   sits between \`// @block\` and \`// @end\` markers.
+- The other files in \`src/\` (UCI, board, time management, ...) are the
+  machinery around it. They only contain what your blocks need, and you are
+  free to change them too.
 - \`workspace.json\`: your blocks; open it in Chess From Scratch to keep editing.
-- \`runtime/\`: board, UCI, time management, hash table (MIT licensed).
 `;
 }
 
 const GITIGNORE = "/target/\n";
 
+const CARGO_CONFIG = `# Build for the CPU of the machine that compiles the engine (fastest).
+# Delete this file to build a binary that runs on any x86-64 machine.
+[build]
+rustflags = ["-C", "target-cpu=native"]
+`;
+
+export interface GenerateOptions {
+  /** Keep the unit tests (used for the reference crate in the CFS repo). */
+  includeTests?: boolean;
+}
+
 /** Generates every file of the exported project. Throws on validation errors. */
-export function generateProject(ws: Workspace): GeneratedFile[] {
+export function generateProject(ws: Workspace, options: GenerateOptions = {}): GeneratedFile[] {
   const errors = validate(ws).filter((i) => i.level === "error");
   if (errors.length > 0) throw new GenerateError(errors);
 
-  const enabled = enabledRegions(ws);
+  const enabled = enabledRegions(ws, options.includeTests);
   const render = (name: keyof typeof TEMPLATES) =>
     renderTemplate(TEMPLATES[name], enabled, KNOWN_REGIONS, `${name}.rs`);
 
@@ -273,15 +284,10 @@ export function generateProject(ws: Workspace): GeneratedFile[] {
     { path: "Cargo.toml", contents: generateCargoToml(ws) },
     { path: "README.md", contents: generateReadme(ws) },
     { path: ".gitignore", contents: GITIGNORE },
+    { path: ".cargo/config.toml", contents: CARGO_CONFIG },
     { path: "workspace.json", contents: `${JSON.stringify(ws, null, 2)}\n` },
     { path: "src/main.rs", contents: generateMain(ws) },
-    { path: "src/search.rs", contents: render("search") },
-    { path: "src/eval.rs", contents: render("eval") },
     { path: "src/params.rs", contents: generateParams(ws) },
-    { path: "runtime/Cargo.toml", contents: generateRuntimeCargoToml() },
-    ...Object.entries(RUNTIME_SOURCES).map(([path, contents]) => ({
-      path: `runtime/${path}`,
-      contents,
-    })),
+    ...templateFiles(ws).map((name) => ({ path: `src/${name}.rs`, contents: render(name) })),
   ];
 }

@@ -11,8 +11,8 @@ use crate::position::Position;
 use crate::time::TimeManager;
 use crate::uci::Engine;
 
-/// Depth used when `bench` is run without an argument.
-pub const DEFAULT_DEPTH: i32 = 8;
+/// Depth used when neither `bench <depth>` nor the engine says otherwise.
+pub const DEFAULT_DEPTH: i32 = 5;
 
 pub const POSITIONS: [&str; 16] = [
     "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
@@ -36,7 +36,7 @@ pub const POSITIONS: [&str; 16] = [
 /// Runs the benchmark and prints `<nodes> nodes <nps> nps`.
 /// Returns the total node count.
 pub fn run<E: Engine>(depth: Option<i32>) -> u64 {
-    let depth = depth.unwrap_or(DEFAULT_DEPTH);
+    let depth = depth.unwrap_or(E::BENCH_DEPTH);
     let mut engine = E::new();
     let stop = Arc::new(AtomicBool::new(false));
     let start = Instant::now();
@@ -57,6 +57,7 @@ pub fn run<E: Engine>(depth: Option<i32>) -> u64 {
     total
 }
 
+// @block tests
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,3 +69,4 @@ mod tests {
         }
     }
 }
+// @end tests

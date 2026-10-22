@@ -144,6 +144,7 @@ impl TimeManager {
     }
 }
 
+// @block tests
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,3 +167,4 @@ mod tests {
         assert!(tm.soft.unwrap() <= tm.hard.unwrap());
     }
 }
+// @end tests

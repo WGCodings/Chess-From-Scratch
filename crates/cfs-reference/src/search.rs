@@ -1,27 +1,24 @@
 //! Negamax search skeleton. Each placed block sits between
 //! `// @block <name>` and `// @end <name>` markers.
 
-#![allow(
-    unused_imports,
-    unused_mut,
-    unused_variables,
-    unused_assignments,
-    dead_code
-)]
-
-use crate::eval::evaluate;
-use crate::params::*;
+#![allow(unused_imports, unused_mut, unused_variables, unused_assignments)]
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use cfs_runtime::chess::Move;
-use cfs_runtime::moves::{
-    has_non_pawn_material, is_capture, is_quiet, mvv_lva, History, Killers, MoveList, PvTable,
-};
-use cfs_runtime::score::{print_info, IterationInfo, INF, MATE, MATE_BOUND, MAX_PLY};
-use cfs_runtime::tt::{score_from_tt, score_to_tt, Bound, TranspositionTable};
-use cfs_runtime::{Engine, Position, SearchResult, TimeManager, TimeParams};
+use cozy_chess::{Board, Color, Move, Piece};
+
+use crate::eval::evaluate;
+use crate::moves::{is_capture, is_quiet, MoveList, PvTable};
+use crate::params::*;
+use crate::position::Position;
+use crate::score::{print_info, IterationInfo, INF, MATE, MATE_BOUND, MAX_PLY};
+use crate::time::{TimeManager, TimeParams};
+use crate::uci::{Engine, SearchResult};
+
+// @block transposition_table
+use crate::tt::{score_from_tt, score_to_tt, Bound, TranspositionTable};
+// @end transposition_table
 
 pub struct Searcher {
     nodes: u64,
@@ -48,6 +45,7 @@ pub struct Searcher {
 impl Engine for Searcher {
     const NAME: &'static str = ENGINE_NAME;
     const AUTHOR: &'static str = ENGINE_AUTHOR;
+    const BENCH_DEPTH: i32 = ENGINE_BENCH_DEPTH;
     // @block transposition_table
     const DEFAULT_HASH_MB: usize = TT_HASH_MB;
     // @end transposition_table
@@ -88,11 +86,11 @@ impl Engine for Searcher {
         // @end history
     }
 
+    // @block transposition_table
     fn set_hash(&mut self, mb: usize) {
-        // @block transposition_table
         self.tt.resize(mb);
-        // @end transposition_table
     }
+    // @end transposition_table
 
     fn time_params() -> TimeParams {
         TimeParams {
@@ -489,3 +487,94 @@ fn lmr_table() -> [[i32; 64]; 64] {
     table
 }
 // @end late_move_reductions
+
+/// Most Valuable Victim, Least Valuable Attacker: higher is better.
+#[inline]
+pub fn mvv_lva(board: &Board, mv: Move) -> i32 {
+    const VALUE: [i32; 6] = [1, 3, 3, 5, 9, 0];
+    let victim = board.piece_on(mv.to).unwrap_or(Piece::Pawn);
+    let attacker = board.piece_on(mv.from).unwrap_or(Piece::Pawn);
+    VALUE[victim as usize] * 16 - VALUE[attacker as usize]
+}
+
+// @block null_move_pruning
+/// True when `color` has a knight, bishop, rook or queen (null-move safety).
+#[inline]
+pub fn has_non_pawn_material(board: &Board, color: Color) -> bool {
+    let pawns_and_king = board.pieces(Piece::Pawn) | board.pieces(Piece::King);
+    !(board.colors(color) & !pawns_and_king).is_empty()
+}
+// @end null_move_pruning
+
+// @block killers
+/// Two quiet moves per ply that recently caused a beta cutoff.
+pub struct Killers {
+    table: [[Option<Move>; 2]; MAX_PLY + 1],
+}
+
+impl Default for Killers {
+    fn default() -> Self {
+        Self {
+            table: [[None; 2]; MAX_PLY + 1],
+        }
+    }
+}
+
+impl Killers {
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    /// 0 for the first killer, 1 for the second, None otherwise.
+    #[inline]
+    pub fn slot(&self, ply: usize, mv: Move) -> Option<usize> {
+        self.table[ply].iter().position(|&k| k == Some(mv))
+    }
+
+    #[inline]
+    pub fn push(&mut self, ply: usize, mv: Move) {
+        let slots = &mut self.table[ply];
+        if slots[0] != Some(mv) {
+            slots[1] = slots[0];
+            slots[0] = Some(mv);
+        }
+    }
+}
+// @end killers
+
+// @block history
+/// Butterfly history: a score per side, from-square and to-square.
+pub struct History {
+    table: Box<[[[i32; 64]; 64]; 2]>,
+}
+
+impl Default for History {
+    fn default() -> Self {
+        Self {
+            table: Box::new([[[0; 64]; 64]; 2]),
+        }
+    }
+}
+
+impl History {
+    /// Scores saturate towards this value.
+    pub const MAX: i32 = 16_384;
+
+    pub fn clear(&mut self) {
+        self.table.iter_mut().flatten().for_each(|row| row.fill(0));
+    }
+
+    #[inline]
+    pub fn get(&self, color: Color, mv: Move) -> i32 {
+        self.table[color as usize][mv.from as usize][mv.to as usize]
+    }
+
+    /// Adds `bonus` (negative for a malus) with gravity so scores stay bounded.
+    #[inline]
+    pub fn update(&mut self, color: Color, mv: Move, bonus: i32) {
+        let bonus = bonus.clamp(-Self::MAX, Self::MAX);
+        let entry = &mut self.table[color as usize][mv.from as usize][mv.to as usize];
+        *entry += bonus - *entry * bonus.abs() / Self::MAX;
+    }
+}
+// @end history

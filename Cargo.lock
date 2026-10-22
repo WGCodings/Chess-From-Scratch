@@ -6,13 +6,6 @@ version = 3
 name = "cfs-reference"
 version = "0.1.0"
 dependencies = [
- "cfs-runtime",
-]
-
-[[package]]
-name = "cfs-runtime"
-version = "0.1.0"
-dependencies = [
  "cozy-chess",
 ]
 

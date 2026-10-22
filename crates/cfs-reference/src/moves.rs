@@ -1,7 +1,6 @@
-//! Move lists and the tables used by move-ordering blocks:
-//! MVV-LVA, killer moves, history heuristic and the PV table.
+//! Move lists, capture detection and the principal-variation table.
 
-use cozy_chess::{Board, Color, Move, Piece, Square};
+use cozy_chess::{Board, Move, Piece, Square};
 
 use crate::score::MAX_PLY;
 
@@ -47,6 +46,7 @@ impl MoveList {
         list
     }
 
+    // @block quiescence
     /// Legal captures (including en passant and capturing promotions).
     pub fn captures(board: &Board) -> Self {
         let mut list = Self::new();
@@ -61,6 +61,7 @@ impl MoveList {
         });
         list
     }
+    // @end quiescence
 
     #[inline]
     pub fn push(&mut self, mv: Move) {
@@ -124,91 +125,6 @@ pub fn is_quiet(board: &Board, mv: Move) -> bool {
     mv.promotion.is_none() && !is_capture(board, mv)
 }
 
-/// Most Valuable Victim, Least Valuable Attacker: higher is better.
-#[inline]
-pub fn mvv_lva(board: &Board, mv: Move) -> i32 {
-    const VALUE: [i32; 6] = [1, 3, 3, 5, 9, 0];
-    let victim = board.piece_on(mv.to).unwrap_or(Piece::Pawn);
-    let attacker = board.piece_on(mv.from).unwrap_or(Piece::Pawn);
-    VALUE[victim as usize] * 16 - VALUE[attacker as usize]
-}
-
-/// True when `color` has a knight, bishop, rook or queen (null-move safety).
-#[inline]
-pub fn has_non_pawn_material(board: &Board, color: Color) -> bool {
-    let pawns_and_king = board.pieces(Piece::Pawn) | board.pieces(Piece::King);
-    !(board.colors(color) & !pawns_and_king).is_empty()
-}
-
-/// Two quiet moves per ply that recently caused a beta cutoff.
-pub struct Killers {
-    table: [[Option<Move>; 2]; MAX_PLY + 1],
-}
-
-impl Default for Killers {
-    fn default() -> Self {
-        Self {
-            table: [[None; 2]; MAX_PLY + 1],
-        }
-    }
-}
-
-impl Killers {
-    pub fn clear(&mut self) {
-        *self = Self::default();
-    }
-
-    /// 0 for the first killer, 1 for the second, None otherwise.
-    #[inline]
-    pub fn slot(&self, ply: usize, mv: Move) -> Option<usize> {
-        self.table[ply].iter().position(|&k| k == Some(mv))
-    }
-
-    #[inline]
-    pub fn push(&mut self, ply: usize, mv: Move) {
-        let slots = &mut self.table[ply];
-        if slots[0] != Some(mv) {
-            slots[1] = slots[0];
-            slots[0] = Some(mv);
-        }
-    }
-}
-
-/// Butterfly history: a score per side, from-square and to-square.
-pub struct History {
-    table: Box<[[[i32; 64]; 64]; 2]>,
-}
-
-impl Default for History {
-    fn default() -> Self {
-        Self {
-            table: Box::new([[[0; 64]; 64]; 2]),
-        }
-    }
-}
-
-impl History {
-    /// Scores saturate towards this value.
-    pub const MAX: i32 = 16_384;
-
-    pub fn clear(&mut self) {
-        self.table.iter_mut().flatten().for_each(|row| row.fill(0));
-    }
-
-    #[inline]
-    pub fn get(&self, color: Color, mv: Move) -> i32 {
-        self.table[color as usize][mv.from as usize][mv.to as usize]
-    }
-
-    /// Adds `bonus` (negative for a malus) with gravity so scores stay bounded.
-    #[inline]
-    pub fn update(&mut self, color: Color, mv: Move, bonus: i32) {
-        let bonus = bonus.clamp(-Self::MAX, Self::MAX);
-        let entry = &mut self.table[color as usize][mv.from as usize][mv.to as usize];
-        *entry += bonus - *entry * bonus.abs() / Self::MAX;
-    }
-}
-
 /// Triangular principal-variation table.
 pub struct PvTable {
     lines: Box<[[Option<Move>; MAX_PLY + 1]; MAX_PLY + 1]>,
@@ -252,6 +168,7 @@ impl PvTable {
     }
 }
 
+// @block tests
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,3 +203,4 @@ mod tests {
         assert_eq!(list.pick(0), last);
     }
 }
+// @end tests

@@ -8,16 +8,47 @@
   </head>
   <body>
     <header class="topbar">
-      <span class="logo">Chess From Scratch</span>
-      <span class="tag">Sprint 0 skeleton</span>
+      <div class="brand">
+        <img src="/favicon.svg" alt="" width="24" height="24" />
+        <span class="logo">Chess From Scratch</span>
+      </div>
+      <div class="actions">
+        <label class="select">
+          <span>New</span>
+          <select id="template" aria-label="Start a new engine from a template">
+            <option value="" selected disabled>from template…</option>
+            <option value="starter">Starter engine</option>
+            <option value="reference">Every block</option>
+            <option value="empty">Empty skeleton</option>
+          </select>
+        </label>
+        <button id="open" class="btn" type="button">Open</button>
+        <button id="save" class="btn" type="button">Save</button>
+        <button id="export" class="btn primary" type="button">Export Rust project</button>
+        <input id="file" type="file" accept=".json,application/json" hidden />
+      </div>
     </header>
+
     <main class="layout">
       <div id="workspace" class="workspace"></div>
-      <section class="preview">
-        <h2>Generated Cargo.toml</h2>
-        <pre id="code"></pre>
-      </section>
+
+      <aside class="side">
+        <nav class="tabs" id="tabs" role="tablist"></nav>
+        <div class="code-wrap">
+          <div class="code-head">
+            <span id="code-path" class="code-path"></span>
+            <button id="copy" class="btn small" type="button">Copy</button>
+          </div>
+          <pre id="code" class="code" tabindex="0"></pre>
+        </div>
+        <section class="issues" aria-live="polite">
+          <h2>Status</h2>
+          <ul id="issues"></ul>
+        </section>
+      </aside>
     </main>
+
+    <div id="toast" class="toast" role="status"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -1,9 +1,10 @@
 Copyright (c) 2026 WG. All rights reserved.
 
-This repository and its contents are proprietary and confidential, except
-where a subdirectory contains its own LICENSE file (currently
-crates/cfs-runtime, which is MIT licensed so that engines exported from
-Chess From Scratch are fully owned by their creators).
+This repository and its contents are proprietary and confidential.
+
+Engines exported from Chess From Scratch, including all code the generator
+copies into them, belong to the people who export them: they may use,
+modify and distribute that code without restriction.
 
 No part of this repository may be copied, modified, distributed or used
 without prior written permission from the copyright holder.

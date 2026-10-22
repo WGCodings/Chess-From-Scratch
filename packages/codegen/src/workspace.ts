@@ -18,6 +18,10 @@ import {
 
 export const WORKSPACE_FORMAT_VERSION = 1;
 
+/** Low on purpose: a bench without pruning blocks must still finish in seconds. */
+export const DEFAULT_BENCH_DEPTH = 5;
+export const MAX_BENCH_DEPTH = 30;
+
 export type Params = Record<string, ParamValue>;
 
 export interface BlockInstance<T extends string> {
@@ -30,6 +34,8 @@ export interface Workspace {
   engine: {
     name: string;
     author: string;
+    /** Depth `bench` searches when run without an argument. */
+    benchDepth: number;
     timeManagement: Params;
     /** `null` when the transposition table block is not placed. */
     transpositionTable: Params | null;
@@ -59,6 +65,7 @@ export function emptyWorkspace(name = "My Engine", author = "me"): Workspace {
     engine: {
       name,
       author,
+      benchDepth: DEFAULT_BENCH_DEPTH,
       timeManagement: defaultParams(TIME_MANAGEMENT.params),
       transpositionTable: null,
     },
@@ -146,6 +153,10 @@ export function validate(ws: Workspace): Issue[] {
     return issues;
   }
   if (!ws.engine.name.trim()) issues.push({ level: "error", message: "The engine needs a name." });
+  const bd = ws.engine.benchDepth;
+  if (!Number.isInteger(bd) || bd < 1 || bd > MAX_BENCH_DEPTH) {
+    issues.push({ level: "error", message: `Bench depth must be a whole number from 1 to ${MAX_BENCH_DEPTH}.` });
+  }
 
   checkParams("Time management", TIME_MANAGEMENT.params, ws.engine.timeManagement, issues);
   if (ws.engine.transpositionTable) {
@@ -209,8 +220,9 @@ export function validate(ws: Workspace): Issue[] {
 }
 
 /** Names of every block region enabled in the Rust templates. */
-export function enabledRegions(ws: Workspace): Set<string> {
+export function enabledRegions(ws: Workspace, includeTests = false): Set<string> {
   const regions = new Set<string>();
+  if (includeTests) regions.add("tests");
   if (ws.engine.transpositionTable) regions.add("transposition_table");
   for (const slot of SEARCH_SLOTS) {
     for (const block of ws.search.slots[slot]) regions.add(block.type);
@@ -221,6 +233,7 @@ export function enabledRegions(ws: Workspace): Set<string> {
 
 /** Every region name a template may use. */
 export const KNOWN_REGIONS: ReadonlySet<string> = new Set([
+  "tests",
   "transposition_table",
   ...Object.keys(SEARCH_BLOCKS),
   ...Object.keys(EVAL_TERMS).map((t) => `eval_${t}`),
