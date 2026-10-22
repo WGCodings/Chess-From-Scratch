@@ -1,5 +1,5 @@
 import * as Blockly from "blockly";
-import { generateCargoToml } from "@cfs/codegen";
+import { generateCargoToml, starterWorkspace } from "@cfs/codegen";
 import "./style.css";
 
 // Sprint 0: one root block proves Blockly, the codegen package and the
@@ -40,10 +40,10 @@ function refresh(): void {
     code.textContent = "// Drag an Engine block onto the workspace.";
     return;
   }
-  code.textContent = generateCargoToml({
-    name: engine.getFieldValue("NAME"),
-    author: engine.getFieldValue("AUTHOR"),
-  }).contents;
+  const ws = starterWorkspace();
+  ws.engine.name = engine.getFieldValue("NAME");
+  ws.engine.author = engine.getFieldValue("AUTHOR");
+  code.textContent = generateCargoToml(ws);
 }
 
 workspace.addChangeListener(refresh);

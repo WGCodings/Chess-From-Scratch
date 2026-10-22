@@ -1,6 +1,6 @@
 [package]
 name = "cfs-reference"
-description = "Hand-written reference engine using every MVP block. The code generator must reproduce its bench node count."
+description = "Generator output for the workspace with every MVP block; its bench node count is the golden fingerprint."
 publish = false
 edition.workspace = true
 version.workspace = true

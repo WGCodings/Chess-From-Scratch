@@ -4,12 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "predev": "node scripts/copy-blockly-media.mjs",
+    "predev": "npm run embed -w @cfs/codegen && node scripts/copy-blockly-media.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/copy-blockly-media.mjs",
+    "prebuild": "npm run embed -w @cfs/codegen && node scripts/copy-blockly-media.mjs",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "pretypecheck": "npm run embed -w @cfs/codegen"
   },
   "dependencies": {
     "@cfs/codegen": "^0.1.0",

@@ -11,3 +11,4 @@ apps/web/public/blockly-media/
 .idea/
 .DS_Store
 Thumbs.db
+packages/codegen/src/embedded.generated.ts

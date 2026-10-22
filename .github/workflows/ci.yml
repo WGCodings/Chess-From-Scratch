@@ -18,6 +18,11 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --release
+      - name: Reference bench fingerprint
+        run: |
+          cargo build --release -p cfs-reference
+          ./target/release/cfs-reference bench | tee bench.txt
+          grep -q '^945193 nodes' bench.txt
 
   web:
     name: TypeScript (typecheck, test, build)
@@ -32,3 +37,19 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+  generated:
+    name: Generated engines (fmt, clippy, build, bench)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check:generated -w @cfs/codegen
