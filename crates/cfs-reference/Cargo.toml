@@ -1,0 +1,10 @@
+[package]
+name = "cfs-reference"
+description = "Hand-written reference engine using every MVP block. The code generator must reproduce its bench node count."
+publish = false
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cfs-runtime.workspace = true

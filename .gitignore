@@ -1,0 +1,13 @@
+# Rust
+/target/
+
+# Node
+node_modules/
+dist/
+apps/web/public/blockly-media/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

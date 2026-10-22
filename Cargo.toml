@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/cfs-runtime", "crates/cfs-reference"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+rust-version = "1.80"
+
+[workspace.dependencies]
+cozy-chess = "0.3.4"
+cfs-runtime = { path = "crates/cfs-runtime" }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
