@@ -41,6 +41,22 @@
     const back = new Uint8Array(await inv("read_file", { path }));
     if (back.join(",") !== "1,2,3,250") throw new Error(`read_file gave ${back.join(",")}`);
     log.push("write_file/read_file round trip");
+    // A real test: fastchess and a book are downloaded, both branches built, a few games played.
+    localStorage.setItem("cfs.test.options", JSON.stringify({ tc: "1+0.01", concurrency: 1, maxGames: 4, book: { kind: "builtin", id: "8moves_v3" } }));
+    document.querySelector("#branch-btn").click();
+    await sleep(300);
+    document.querySelector(".br-new input").value = "selftest";
+    document.querySelector(".br-new button").click();
+    await sleep(500);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    document.querySelector("#tests-btn").click();
+    await waitFor("the test form", () => document.querySelector(".ts-start"), 10);
+    document.querySelector(".ts-start").click();
+    await waitFor("the test to finish", () => document.querySelector(".ts-run .ts-badge:not(.ts-running)"), 900);
+    const runText = document.querySelector(".ts-run").textContent;
+    const badge = document.querySelector(".ts-run .ts-badge").textContent;
+    log.push(`test: ${badge}; ${runText.replace(/\s+/g, " ").slice(0, 160)}`);
+    if (!/4\s*games/.test(runText)) throw new Error(`the test did not play 4 games: ${document.querySelector(".ts-out")?.textContent.slice(-600)}`);
     log.push("--- engine output ---", ...[...document.querySelectorAll("#dock .dock-output div")].slice(-12).map((d) => d.textContent));
     await report(true);
   } catch (err) {

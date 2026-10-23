@@ -628,6 +628,12 @@ await test("branches: clone, change, switch, keep, and they survive a reload and
   // Keep the branch: main gets its engine.
   await p.click("#branch-btn");
   await p.locator('.br-item[data-branch="new-name"] .keep').click();
+  await p.waitForSelector(".br-review .cd-file");
+  const diff = await p.locator(".br-review .cd").innerText();
+  check(diff.includes("Cargo.toml") && diff.includes("Branchy"), `diff: ${diff.slice(0, 300)}`);
+  check((await p.locator(".br-review .cd-a").count()) > 0 && (await p.locator(".br-review .cd-d").count()) > 0, "no + and − lines");
+  if (process.env.CFS_SHOTS) await p.locator(".br").screenshot({ path: join(process.env.CFS_SHOTS, "keep.png") });
+  await p.locator(".br .keep-confirm").click();
   await p.waitForTimeout(600);
   check((await p.locator(".br-item").count()) === 1, "branch not closed");
   check((await engineName(p)) === "Branchy", `main after keep: ${await engineName(p)}`);
@@ -708,6 +714,36 @@ function desktopMock(): void {
       calls.push(["writeFile", path, data.length]);
       disk[path] = data;
     },
+    findFastchess: async () => (disk["fastchess"] ? "/tools/fastchess" : null),
+    installFastchess: async (onLine: (l: string) => void) => {
+      onLine("Downloading fastchess");
+      disk["fastchess"] = new Uint8Array(1);
+      calls.push(["installFastchess"]);
+      return "/tools/fastchess";
+    },
+    getBook: async (file: string) => {
+      calls.push(["getBook", file]);
+      return `/tools/books/${file}`;
+    },
+    runBench: async (program: string) => {
+      calls.push(["bench", program]);
+      return program.includes("renamed") ? "40000 nodes 800000 nps" : "35000 nodes 700000 nps";
+    },
+    startTest: async (program: string, args: string[], _dir: string, cb: (e: { kind: string; text: string }) => void) => {
+      calls.push(["startTest", program, args]);
+      const lines = [
+        "Started game 1 of 200 (a vs b)",
+        "Results of a vs b (5+0.05, 1t, 16MB, UHO_4060_v2.epd):",
+        "Elo: 30.10 +/- 12.40, nElo: 40.00 +/- 15.00",
+        "Games: 120, Wins: 50, Losses: 40, Draws: 30, Points: 65.0 (54.17 %)",
+        "Ptnml(0-2): [5, 10, 20, 15, 10], WL/DD Ratio: 0.50",
+        "LLR: 2.95 (100.2%) (-2.94, 2.94) [0.00, 10.00]",
+        "SPRT ([0.00, 10.00]) completed - H1 was accepted",
+      ];
+      lines.forEach((text, i) => setTimeout(() => cb({ kind: "line", text }), 50 * (i + 1)));
+      setTimeout(() => cb({ kind: "exit", text: "fastchess finished." }), 50 * (lines.length + 2));
+    },
+    stopTest: async () => void calls.push(["stopTest"]),
     readFile: async (path: string) => {
       if (!disk[path]) throw new Error(`no file ${path}`);
       return disk[path];
@@ -786,6 +822,52 @@ await test("desktop: Save writes the file, changes are saved to it, Open reads i
   await p.waitForSelector("#dock .out-engine:has-text('uciok')");
   const write = (await calls(p)).find((x) => x[0] === "write")!;
   check(String(write[1]).endsWith("-try"), `branch folder: ${write[1]}`);
+}, desktopMock);
+
+await test("tests on the website: the timeline is there, running needs the desktop app", async (p) => {
+  await p.click("#tests-btn");
+  await p.waitForSelector(".ts");
+  check((await p.locator(".ts-new").innerText()).includes("desktop app"), "no desktop notice");
+  check((await p.locator(".ts-timeline").innerText()).includes("No tests yet"), "timeline");
+});
+
+await test("desktop: a test builds both branches, plays, passes, and Keep merges the branch", async (p) => {
+  await template(p, "starter");
+  await p.click("#branch-btn");
+  await p.fill(".br-new input", "+ renamed");
+  await p.locator(".br-new button").click();
+  await p.keyboard.press("Escape");
+  await setEngineName(p, "Renamed");
+  await p.waitForTimeout(300);
+  await p.click("#tests-btn");
+  await p.waitForSelector(".ts-start");
+  check((await p.locator(".ts-what").innerText()).includes("Engine name"), `what: ${await p.locator(".ts-what").innerText()}`);
+  await p.locator('.ts-preset[data-preset="standard"]').click();
+  await p.click(".ts-start");
+  await p.waitForSelector(".ts-run .ts-badge.ts-passed", { timeout: 15000 });
+  const run = await p.locator(".ts-run").innerText();
+  check(run.includes("+30.1 ± 12.4") && run.includes("120"), `run: ${run.slice(0, 300)}`);
+  check(run.includes("40000 / 35000"), "bench numbers");
+  const c = await calls(p);
+  check(c.some((x) => x[0] === "installFastchess") && c.some((x) => x[0] === "getBook" && x[1] === "UHO_4060_v2.epd"), "setup steps");
+  const args = (c.find((x) => x[0] === "startTest")![2] as string[]).join(" ");
+  check(args.includes("tc=10+0.1") && args.includes("elo1=5") && args.includes("file=/tools/books/UHO_4060_v2.epd"), args);
+  check((c.filter((x) => x[0] === "build") as unknown[][]).length === 2, "both engines built");
+  if (process.env.CFS_SHOTS) await p.locator(".ts").screenshot({ path: join(process.env.CFS_SHOTS, "tests.png") });
+  // Keep it: the review opens, then main gets the branch.
+  await p.click(".ts-keep");
+  await p.waitForSelector(".br-review");
+  await p.locator(".br .keep-confirm").click();
+  await p.waitForTimeout(500);
+  check((await engineName(p)) === "Renamed", "not kept");
+  await p.keyboard.press("Escape");
+  await p.click("#tests-btn");
+  const timeline = await p.locator(".ts-timeline").innerText();
+  check(timeline.includes("passed") && timeline.includes("kept") && timeline.includes("+30.1"), `timeline: ${timeline}`);
+  check((await p.locator(".ts-chart").count()) === 1, "no Elo chart");
+  await p.keyboard.press("Escape");
+  await p.click("#branch-btn");
+  check((await p.locator(".br-history").innerText()).includes("Tested"), "no history line for the test");
 }, desktopMock);
 
 await test("the guide shows its pages and links between them", async (p) => {

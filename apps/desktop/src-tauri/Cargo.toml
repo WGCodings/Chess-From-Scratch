@@ -24,6 +24,13 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 portable-pty = "0.9"
+# Downloading fastchess and opening books the first time a test runs.
+ureq = { version = "3", features = ["platform-verifier"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+tar = "0.4"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

@@ -20,6 +20,7 @@ import {
 } from "./blocks";
 import { parseBlockFile } from "./blockfile";
 import { normalizeWorkspace, type Params, type Workspace } from "./workspace";
+import { describeResult, type TestRecord } from "./sprt";
 
 export const WORKBENCH_FORMAT_VERSION = 1;
 
@@ -59,8 +60,8 @@ export interface Workbench {
   branches: Record<string, Branch>;
   /** Oldest first. */
   history: HistoryEvent[];
-  /** Engine test results (Sprint 8); kept as they are. */
-  tests?: unknown[];
+  /** Engine tests (SPRT), oldest first. */
+  tests?: TestRecord[];
 }
 
 export const MAIN_BRANCH_NAME = "main";
@@ -160,6 +161,7 @@ export function keepBranch(wb: Workbench, id: string, at = now()): void {
   for (const o of Object.values(wb.branches)) if (o.parent === id) o.parent = wb.main;
   delete wb.branches[id];
   if (wb.current === id) wb.current = wb.main;
+  markDecision(wb, id, "kept");
   wb.history.push({ at, kind: "kept", branch: b.name, changes });
 }
 
@@ -171,7 +173,31 @@ export function deleteBranch(wb: Workbench, id: string, at = now()): void {
   for (const o of Object.values(wb.branches)) if (o.parent === id) o.parent = b.parent ?? wb.main;
   delete wb.branches[id];
   if (wb.current === id) wb.current = wb.main;
+  markDecision(wb, id, "deleted");
   wb.history.push({ at, kind: "deleted", branch: b.name, changes });
+}
+
+/** The latest finished test of branch `id` (as the new version) gets the user's decision. */
+function markDecision(wb: Workbench, id: string, decision: "kept" | "deleted"): void {
+  const t = [...(wb.tests ?? [])].reverse().find((x) => x.newBranch.id === id && x.status !== "running" && !x.decision);
+  if (t) t.decision = decision;
+}
+
+/** Adds a test (or replaces it, by id) and records a finished one in the history. */
+export function saveTest(wb: Workbench, test: TestRecord): void {
+  const tests = (wb.tests ??= []);
+  const i = tests.findIndex((t) => t.id === test.id);
+  const copyOf = JSON.parse(JSON.stringify(test)) as TestRecord;
+  if (i >= 0) tests[i] = copyOf;
+  else tests.push(copyOf);
+  if (test.status !== "running") {
+    wb.history.push({ at: test.finished ?? now(), kind: "test", branch: test.newBranch.name, detail: `${describeResult(test)} against ${test.baseBranch.name}`, changes: test.changes });
+  }
+}
+
+/** The latest test of branch `id` against another one. */
+export function lastTestOf(wb: Workbench, id: string): TestRecord | undefined {
+  return [...(wb.tests ?? [])].reverse().find((t) => t.newBranch.id === id);
 }
 
 /** Branches in a stable order: main first, then oldest first. */
@@ -203,7 +229,8 @@ export function parseWorkbench(value: unknown): Workbench {
       current,
       branches,
       history: Array.isArray(v.history) ? v.history : [],
-      ...(Array.isArray(v.tests) ? { tests: v.tests } : {}),
+      // A test that was running when the app closed has stopped.
+      ...(Array.isArray(v.tests) ? { tests: (v.tests as TestRecord[]).map((t) => (t.status === "running" ? { ...t, status: "stopped" as const } : t)) } : {}),
     };
   }
   return newWorkbench(normalizeWorkspace(value as Workspace));

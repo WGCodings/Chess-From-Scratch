@@ -58,7 +58,7 @@ Let two versions play each other there too, to get a first feeling.
 
 ## Did my change make it stronger?
 
-A handful of games tells you very little. Engines are tested with thousands of fast games, until the result is clear. The usual tool is [fastchess](https://github.com/Disservin/fastchess):
+A handful of games tells you very little. Engines are tested with thousands of fast games, until the result is clear. In the desktop app, **Tests** does all of this for you: see [Testing your changes](Testing-Changes). By hand, the usual tool is [fastchess](https://github.com/Disservin/fastchess):
 
 1. Build the old version and copy the program to `old` (or `old.exe`).
 2. Make your change, build again and copy it to `new`.

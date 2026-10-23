@@ -32,7 +32,7 @@ pub fn cargo() -> PathBuf {
 }
 
 /// A command that doesn't open a console window on Windows.
-fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+pub(crate) fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     #[allow(unused_mut)]
     let mut c = Command::new(program);
     #[cfg(windows)]

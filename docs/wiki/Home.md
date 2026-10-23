@@ -22,6 +22,7 @@ You don't need to know Rust to start. You will pick it up on the way, one block 
 
 - [The desktop app](The-Desktop-App): build, run and talk to your engine with one click, with a terminal. Works offline.
 - [Branches](Branches): try an idea in a copy of your engine, then keep it or delete it.
+- [Testing your changes](Testing-Changes): find out if a change made your engine stronger (desktop app).
 - [Build, test and play](Build-Test-Play): compile it, check it, play it, and test if a change made it stronger.
 - [Saving and sharing](Saving-And-Sharing): where your work is kept, and how to move blocks between projects.
 

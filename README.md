@@ -25,7 +25,7 @@ shows you how.
 
 The website is the demo. The **desktop app** (Windows, macOS, Linux) is the
 full program: the same editor, plus one-click **Run** to build your engine and
-talk to it, a terminal, and soon testing engines against each other. It works
+talk to it, a terminal, and SPRT tests of one version against another. It works
 offline. Download it from the
 [Releases page](https://github.com/WGCodings/Chess-From-Scratch/releases/latest).
 
@@ -38,6 +38,8 @@ offline. Download it from the
 - Change any block, write your own, and build one on top of another.
 - Try ideas in branches: clone your engine, change it, see exactly what
   changed, then keep it or delete it.
+- Test a branch against your main version with SPRT (fastchess, in the
+  desktop app) and follow your engine's Elo over time.
 - Write code in VS Code: link a folder and your changes come back as blocks.
 - Export a complete Rust project with a `bench` command, ready for
   [fastchess](https://github.com/Disservin/fastchess) and

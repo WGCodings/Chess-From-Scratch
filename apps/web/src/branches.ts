@@ -9,6 +9,8 @@ import {
   deleteBranch,
   describeChanges,
   keepBranch,
+  lastTestOf,
+  formatElo,
   mainChangedSince,
   renameBranch,
   summarizeChanges,
@@ -16,6 +18,8 @@ import {
   type Workbench,
 } from "@cfs/codegen";
 import { confirmAction } from "./platform";
+import { diffText, renderDiff, workspaceDiff } from "./codediff";
+import type { Workspace } from "@cfs/codegen";
 
 export interface BranchHost {
   workbench(): Workbench;
@@ -68,6 +72,8 @@ export class BranchPanel {
   private readonly backdrop: HTMLElement;
   private readonly body: HTMLElement;
   private renaming: string | null = null;
+  /** The branch whose Keep is being reviewed (its full code diff against main). */
+  private reviewing: string | null = null;
 
   constructor(
     private readonly button: HTMLButtonElement,
@@ -106,6 +112,7 @@ export class BranchPanel {
   close(): void {
     this.backdrop.hidden = true;
     this.renaming = null;
+    this.reviewing = null;
   }
 
   /** Shows the open branch's name on the top bar button. */
@@ -149,8 +156,95 @@ export class BranchPanel {
     this.render();
   }
 
+  /** A collapsed "Code changes" section; the diff is made when it is opened. */
+  private codeSection(before: Workspace, after: Workspace, label: string, open = false): HTMLElement {
+    const d = el("details", "br-code");
+    const sum = el("summary", undefined, label);
+    d.append(sum);
+    const fill = () => {
+      if (d.dataset.filled) return;
+      d.dataset.filled = "1";
+      const diff = workspaceDiff(before, after);
+      if ("problem" in diff) {
+        d.append(el("p", "br-hint", `No code to compare: ${diff.problem}`));
+        return;
+      }
+      const added = diff.reduce((n, f) => n + f.added, 0);
+      const removed = diff.reduce((n, f) => n + f.removed, 0);
+      sum.textContent = `${label} · +${added} −${removed} in ${diff.length} file${diff.length === 1 ? "" : "s"}`;
+      if (diff.length) {
+        const copy = button("Copy as diff", "Copy these changes as a git diff");
+        copy.addEventListener("click", () => {
+          void navigator.clipboard
+            .writeText(diffText(diff))
+            .then(() => this.host.toast("Copied the diff."))
+            .catch(() => this.host.toast("Copy is not available here."));
+        });
+        d.append(copy);
+      }
+      d.append(renderDiff(diff));
+    };
+    d.addEventListener("toggle", () => d.open && fill());
+    if (open) {
+      d.open = true;
+      fill();
+    }
+    return d;
+  }
+
+  private renderReview(id: string): void {
+    const wb = this.host.workbench();
+    const b = wb.branches[id]!;
+    const main = wb.branches[wb.main]!;
+    const head = el("div", "br-head");
+    head.append(el("h2", undefined, `Keep "${b.name}"?`));
+    const close = button("✕", "Close", "br-x");
+    close.addEventListener("click", () => this.close());
+    head.append(close);
+    const review = el("div", "br-review");
+    review.append(el("p", "br-lead", `"${main.name}" becomes this version and the branch is closed. These are all the changes "${main.name}" gets:`));
+    const lost = mainChangedSince(wb, id);
+    if (lost.length) {
+      const warn = el("div", "br-warn");
+      warn.append(
+        el("strong", undefined, `"${main.name}" changed after you cloned it. Keeping replaces these changes:`),
+        ...describeChanges(lost).map((l) => el("div", "br-mono", l)),
+      );
+      review.append(warn);
+    }
+    const changes = describeChanges(branchChanges(wb, id));
+    if (changes.length) {
+      const ul = el("ul", "br-changes");
+      for (const line of changes) ul.append(el("li", undefined, line));
+      review.append(ul);
+    }
+    review.append(this.codeSection(main.workspace, b.workspace, "Code changes", true));
+    const foot = el("div", "br-foot");
+    const ok = button("Keep it", `Make "${b.name}" the main version`, "btn primary keep-confirm");
+    ok.addEventListener("click", () => {
+      this.reviewing = null;
+      this.act(() => {
+        keepBranch(wb, id);
+        // The main version changed: the canvas shows it again when it is open.
+        if (wb.current === wb.main) this.host.show(wb.current);
+      }, `"${b.name}" is now the main version.`);
+    });
+    const back = button("Back", "Back to the branches", "btn");
+    back.addEventListener("click", () => {
+      this.reviewing = null;
+      this.render();
+    });
+    foot.append(back, ok);
+    this.body.append(head, review, foot);
+  }
+
   private render(): void {
     const wb = this.host.workbench();
+    if (this.reviewing && wb.branches[this.reviewing]) {
+      this.body.replaceChildren();
+      this.renderReview(this.reviewing);
+      return;
+    }
     const main = wb.branches[wb.main]!;
     const current = wb.branches[wb.current]!;
     this.body.replaceChildren();
@@ -227,6 +321,12 @@ export class BranchPanel {
           ? "the main version"
           : `from ${wb.branches[b.parent ?? ""]?.name ?? "main"} · ${changes.length ? `${changes.length} change${changes.length > 1 ? "s" : ""}` : "no changes yet"}`;
       top.append(el("span", "br-meta", meta));
+      const test = lastTestOf(wb, b.id);
+      if (test && b.id !== wb.main) {
+        const badge = el("span", `ts-badge ts-${test.status}`, `${test.status} ${formatElo(test.result.elo, test.result.eloError)}`);
+        badge.title = `Last test against ${test.baseBranch.name}: ${test.result.games} games`;
+        top.append(badge);
+      }
       if (b.id === wb.current) top.append(el("span", "br-open", "open"));
       const actions = el("span", "br-actions");
       if (b.id !== wb.current) {
@@ -236,7 +336,7 @@ export class BranchPanel {
       }
       if (b.id !== wb.main) {
         const keep = button("Keep", "Make this the main version", "btn small keep");
-        keep.addEventListener("click", () => void this.keep(b.id));
+        keep.addEventListener("click", () => this.keep(b.id));
         const del = button("Delete", "Throw this branch away", "btn small del");
         del.addEventListener("click", () => void this.remove(b.id));
         actions.append(keep, del);
@@ -248,6 +348,7 @@ export class BranchPanel {
         for (const line of describeChanges(changes)) ul.append(el("li", undefined, line));
         li.append(ul);
       }
+      if (b.id !== wb.main && b.base && changes.length) li.append(this.codeSection(b.base, b.workspace, "Code changes"));
       list.append(li);
     }
     this.body.append(list);
@@ -272,21 +373,23 @@ export class BranchPanel {
     }
   }
 
-  private async keep(id: string): Promise<void> {
-    const wb = this.host.workbench();
-    const b = wb.branches[id]!;
-    const main = wb.branches[wb.main]!;
-    const lost = mainChangedSince(wb, id);
-    const changes = branchChanges(wb, id);
-    const msg =
-      `Keep "${b.name}"? It becomes the main version (${summarizeChanges(changes)}) and the branch is closed.` +
-      (lost.length ? `\n\n"${main.name}" changed after you cloned it (${summarizeChanges(lost)}). Keeping replaces those changes.` : "");
-    if (!(await confirmAction(msg, "Keep branch"))) return;
-    // The main version changes: the canvas shows it again when it is open.
-    this.act(() => {
-      keepBranch(wb, id);
-      if (wb.current === wb.main) this.host.show(wb.current);
-    }, `"${b.name}" is now the main version.`);
+  /** Opens the panel at the Keep review of branch `id`. */
+  review(id: string): void {
+    if (!this.isOpen) this.open();
+    this.keep(id);
+  }
+
+  /** Asks, then deletes branch `id`. */
+  askDelete(id: string): Promise<void> {
+    return this.remove(id);
+  }
+
+  /** Keep shows every change first, as a code diff against the main version. */
+  private keep(id: string): void {
+    this.host.sync();
+    this.reviewing = id;
+    this.render();
+    this.body.parentElement?.scrollTo(0, 0);
   }
 
   private async remove(id: string): Promise<void> {

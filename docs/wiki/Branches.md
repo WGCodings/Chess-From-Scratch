@@ -26,7 +26,9 @@ You can have several branches at once: one idea each. **Open** switches the canv
 
 ## Is my idea better?
 
-Build and play both versions. In the [desktop app](The-Desktop-App), **▶ Run** builds the open branch in its own folder, so the main version and the branch both stay built. See [Build, test and play](Build-Test-Play) for testing one against the other. Testing branches against each other with one click is coming to the desktop app.
+In the [desktop app](The-Desktop-App), click **Tests**: the two versions play until the result is clear. See [Testing your changes](Testing-Changes). Each branch also builds in its own folder, so **▶ Run** keeps both versions built.
+
+**Keep** shows every change in the generated code first, like `git diff`: removed lines in red, added lines in green, file by file. **Copy as diff** copies it as text. Each branch in the list also has a **Code changes** section with the same diff since it was cloned.
 
 ## History
 

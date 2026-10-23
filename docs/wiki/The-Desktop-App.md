@@ -69,6 +69,6 @@ Each [branch](Branches) gets its own folder (`<engine>-<branch>`), so the main v
 
 Your engine, its branches and your blocks are saved inside the app, like on the website. **Save** asks where to put a `.cfs` file once; after that the app keeps that file up to date by itself. **Open** reads a `.cfs` file from your computer.
 
-## Coming next
+## Testing
 
-Testing two versions of your engine against each other (SPRT, with fastchess) is coming to the desktop app.
+**Tests** plays two branches of your engine against each other until it is clear which is stronger. See [Testing your changes](Testing-Changes).

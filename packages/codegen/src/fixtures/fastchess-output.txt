@@ -1,0 +1,68 @@
+Indexing opening suite...
+Started game 1 of 24 (new vs base)
+Started game 2 of 24 (base vs new)
+Finished game 2 (base vs new): 1/2-1/2 {Draw by 3-fold repetition}
+Started game 3 of 24 (new vs base)
+Finished game 1 (new vs base): 1/2-1/2 {Draw by fifty moves rule}
+Started game 4 of 24 (base vs new)
+Finished game 3 (new vs base): 1/2-1/2 {Draw by insufficient mating material}
+Started game 5 of 24 (new vs base)
+Finished game 4 (base vs new): 0-1 {Black wins by adjudication}
+Started game 6 of 24 (base vs new)
+Finished game 5 (new vs base): 0-1 {Black wins by adjudication}
+Started game 7 of 24 (new vs base)
+Finished game 6 (base vs new): 1/2-1/2 {Draw by 3-fold repetition}
+Started game 8 of 24 (base vs new)
+Finished game 7 (new vs base): 1/2-1/2 {Draw by insufficient mating material}
+Started game 9 of 24 (new vs base)
+Finished game 8 (base vs new): 1-0 {White wins by adjudication}
+Started game 10 of 24 (base vs new)
+Finished game 9 (new vs base): 1-0 {White wins by adjudication}
+Started game 11 of 24 (new vs base)
+Finished game 10 (base vs new): 1/2-1/2 {Draw by 3-fold repetition}
+Started game 12 of 24 (base vs new)
+Finished game 12 (base vs new): 1-0 {White wins by adjudication}
+Started game 13 of 24 (new vs base)
+Finished game 11 (new vs base): 0-1 {Black wins by adjudication}
+Started game 14 of 24 (base vs new)
+Finished game 13 (new vs base): 1/2-1/2 {Draw by 3-fold repetition}
+Started game 15 of 24 (new vs base)
+Finished game 14 (base vs new): 0-1 {Black wins by adjudication}
+Started game 16 of 24 (base vs new)
+Finished game 15 (new vs base): 1/2-1/2 {Draw by insufficient mating material}
+Started game 17 of 24 (new vs base)
+Finished game 16 (base vs new): 1/2-1/2 {Draw by 3-fold repetition}
+Started game 18 of 24 (base vs new)
+Finished game 18 (base vs new): 1-0 {White wins by adjudication}
+Started game 19 of 24 (new vs base)
+Finished game 17 (new vs base): 0-1 {Black wins by adjudication}
+Started game 20 of 24 (base vs new)
+Finished game 19 (new vs base): 1-0 {White wins by adjudication}
+Started game 21 of 24 (new vs base)
+Finished game 20 (base vs new): 1-0 {White wins by adjudication}
+--------------------------------------------------
+Results of new vs base (1+0.01, 1t, 16MB, UHO_4060_v2.epd):
+Elo: -52.51 +/- 126.90, nElo: -67.00 +/- 152.27
+LOS: 19.42 %, DrawRatio: 30.00 %, PairsRatio: 0.75
+Games: 20, Wins: 4, Losses: 7, Draws: 9, Points: 8.5 (42.50 %)
+Ptnml(0-2): [2, 2, 3, 3, 0], WL/DD Ratio: 0.50
+LLR: -0.06 (-2.1%) (-2.94, 2.94) [0.00, 5.00]
+--------------------------------------------------
+Started game 22 of 24 (base vs new)
+Finished game 21 (new vs base): 0-1 {Black wins by adjudication}
+Started game 23 of 24 (new vs base)
+Finished game 22 (base vs new): 1-0 {White mates}
+Started game 24 of 24 (base vs new)
+Finished game 23 (new vs base): 1-0 {White wins by adjudication}
+Finished game 24 (base vs new): 1/2-1/2 {Draw by adjudication}
+--------------------------------------------------
+Results of new vs base (1+0.01, 1t, 16MB, UHO_4060_v2.epd):
+Elo: -58.45 +/- 124.68, nElo: -69.49 +/- 139.00
+LOS: 16.36 %, DrawRatio: 25.00 %, PairsRatio: 0.80
+Games: 24, Wins: 5, Losses: 9, Draws: 10, Points: 10.0 (41.67 %)
+Ptnml(0-2): [3, 2, 3, 4, 0], WL/DD Ratio: 0.50
+LLR: -0.08 (-2.6%) (-2.94, 2.94) [0.00, 5.00]
+--------------------------------------------------
+Finished match
+Total Time: 00:00:37 (hours:minutes:seconds)
+

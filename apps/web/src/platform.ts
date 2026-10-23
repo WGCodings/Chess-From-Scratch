@@ -37,6 +37,17 @@ export interface Desktop {
   pickOpenFile(filter: FileFilter): Promise<string | null>;
   readFile(path: string): Promise<Uint8Array>;
   writeFile(path: string, data: Uint8Array): Promise<void>;
+  /** fastchess's path when it is installed, else null. */
+  findFastchess(): Promise<string | null>;
+  /** Downloads fastchess into the app's tools folder; resolves with its path. */
+  installFastchess(onLine: (line: string) => void): Promise<string>;
+  /** An opening book's path, downloaded the first time. */
+  getBook(file: string, url: string, onLine: (line: string) => void): Promise<string>;
+  /** Runs `<program> bench`; resolves with what it printed. */
+  runBench(program: string): Promise<string>;
+  /** Starts fastchess; its output arrives on `onEvent`. */
+  startTest(program: string, args: string[], dir: string, onEvent: (e: EngineEvent) => void): Promise<void>;
+  stopTest(): Promise<void>;
   /** A yes/no question in a native dialog (window.confirm when absent). */
   ask?(message: string, title: string): Promise<boolean>;
 }
@@ -84,6 +95,12 @@ function tauriDesktop(): Desktop {
     },
     readFile: async (path) => new Uint8Array(await call<ArrayBuffer>("read_file", { path })),
     writeFile: (path, data) => call("write_file", { path, data: Array.from(data) }),
+    findFastchess: () => call("find_fastchess"),
+    installFastchess: async (onLine) => call("install_fastchess", { onLine: await channel(onLine) }),
+    getBook: async (file, url, onLine) => call("get_book", { file, url, onLine: await channel(onLine) }),
+    runBench: (program) => call("run_bench", { program }),
+    startTest: async (program, args, dir, onEvent) => call("start_test", { program, args, dir, onEvent: await channel(onEvent) }),
+    stopTest: () => call("stop_test"),
     ask: async (message, title) => (await import("@tauri-apps/plugin-dialog")).ask(message, { title, kind: "warning" }),
     pickFolder: async (title) => {
       const picked = await (await import("@tauri-apps/plugin-dialog")).open({ directory: true, title });

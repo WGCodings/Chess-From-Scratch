@@ -80,6 +80,7 @@ import { Dock } from "./dock";
 import { installDesktopLinks } from "./links";
 import { confirmAction, desktop, isDesktop } from "./platform";
 import { BranchPanel } from "./branches";
+import { TestsPanel, projectName } from "./tests";
 import "./style.css";
 
 const STORAGE_KEY = "cfs.blockly.v2";
@@ -281,6 +282,7 @@ let current: Workspace | null = null;
 /** All branches of the engine; the open one is on the canvas. */
 let wbench: Workbench = newWorkbench(emptyWorkspace());
 let branchPanel: BranchPanel | null = null;
+let testsPanel: TestsPanel | null = null;
 let savePath: string | null = desktop ? readStored(SAVE_PATH_KEY) : null;
 
 function readStored(key: string): string | null {
@@ -1921,8 +1923,7 @@ const dock = new Dock($("dock"), {
     if (!current) return { problem: "add an Engine block first." };
     if (codeBlocked) return { problem: codeBlocked };
     // Every branch builds in its own folder, so two versions can be tested against each other.
-    const branch = wbench.current === wbench.main ? "" : `-${wbench.current}`;
-    return { name: `${toCrateName(current.engine.name)}${branch}`, files: files.map((f) => ({ path: f.path, contents: f.contents })) };
+    return { name: projectName(wbench, wbench.current, current), files: files.map((f) => ({ path: f.path, contents: f.contents })) };
   },
   layoutChanged: () => Blockly.svgResize(bw),
   stateChanged: () => tutorial?.update(),
@@ -2020,8 +2021,24 @@ branchPanel = new BranchPanel($<HTMLButtonElement>("branch-btn"), {
   changed: () => {
     storeWorkbench();
     scheduleFileSave();
+    testsPanel?.refresh();
   },
   toast,
+});
+testsPanel = new TestsPanel($<HTMLButtonElement>("tests-btn"), {
+  workbench: () => wbench,
+  sync: syncBranch,
+  changed: () => {
+    storeWorkbench();
+    scheduleFileSave();
+    branchPanel?.refresh();
+  },
+  toast,
+  keepBranch: (id) => {
+    testsPanel?.close();
+    branchPanel?.review(id);
+  },
+  deleteBranch: (id) => void branchPanel?.askDelete(id),
 });
 showEngineTop();
 refresh();

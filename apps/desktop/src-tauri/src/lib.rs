@@ -8,6 +8,7 @@ mod project;
 #[cfg(debug_assertions)]
 mod selftest;
 mod terminal;
+mod tester;
 
 use std::path::PathBuf;
 
@@ -17,6 +18,80 @@ use tauri::{Manager, State};
 use engine::{EngineEvent, Engines};
 use project::ProjectFile;
 use terminal::Terminals;
+use tester::Tests;
+
+fn tools_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("tools"))
+}
+
+/// fastchess's path, if it is installed (in the app's tools folder or on PATH).
+#[tauri::command]
+fn find_fastchess(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    Ok(tester::find_fastchess(&tools_dir(&app)?).map(|p| p.to_string_lossy().into_owned()))
+}
+
+/// Downloads fastchess into the app's tools folder; progress arrives on `on_line`.
+#[tauri::command]
+async fn install_fastchess(
+    app: tauri::AppHandle,
+    on_line: Channel<String>,
+) -> Result<String, String> {
+    let tools = tools_dir(&app)?;
+    tester::install_fastchess(&tools, &|l| {
+        let _ = on_line.send(l);
+    })
+    .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// The path of an opening book, downloading it the first time.
+#[tauri::command]
+async fn get_book(
+    app: tauri::AppHandle,
+    file: String,
+    url: String,
+    on_line: Channel<String>,
+) -> Result<String, String> {
+    let tools = tools_dir(&app)?;
+    tester::book(&tools, &file, &url, &|l| {
+        let _ = on_line.send(l);
+    })
+    .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Runs `<program> bench` and returns its output.
+#[tauri::command]
+async fn run_bench(program: String) -> Result<String, String> {
+    tester::bench(&PathBuf::from(program))
+}
+
+/// Starts fastchess with `args` in `dir`; its output arrives on `on_event`.
+#[tauri::command]
+fn start_test(
+    tests: State<'_, Tests>,
+    program: String,
+    args: Vec<String>,
+    dir: String,
+    on_event: Channel<EngineEvent>,
+) -> Result<(), String> {
+    tests.start(
+        &PathBuf::from(program),
+        &args,
+        &PathBuf::from(dir),
+        move |e| {
+            let _ = on_event.send(e);
+        },
+    )
+}
+
+#[tauri::command]
+async fn stop_test(app: tauri::AppHandle) -> Result<(), String> {
+    app.state::<Tests>().stop();
+    Ok(())
+}
 
 /// Where an engine's project lives unless the user picked a folder:
 /// `<app data>/engines/<crate name>`.
@@ -133,6 +208,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(Engines::default())
         .manage(Terminals::default())
+        .manage(Tests::default())
         .invoke_handler(tauri::generate_handler![
             default_project_dir,
             write_project,
@@ -147,6 +223,12 @@ pub fn run() {
             write_terminal,
             resize_terminal,
             close_terminal,
+            find_fastchess,
+            install_fastchess,
+            get_book,
+            run_bench,
+            start_test,
+            stop_test,
             #[cfg(debug_assertions)]
             selftest::selftest_done
         ])
