@@ -1,0 +1,8 @@
+node_modules
+**/node_modules
+**/dist
+target
+crates/*/target
+.git
+apps/web/public/blockly-media
+packages/codegen/src/embedded.generated.ts

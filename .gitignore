@@ -1,6 +1,5 @@
 # Rust
 /target/
-/TEST/
 
 # Node
 node_modules/
@@ -13,3 +12,7 @@ apps/web/public/blockly-media/
 .DS_Store
 Thumbs.db
 packages/codegen/src/embedded.generated.ts
+
+# Your own hosting setup (e.g. the docker-compose.yml on the server) stays out of the repository.
+docker-compose.yml
+docker-compose.override.yml

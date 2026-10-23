@@ -158,7 +158,7 @@ quit`)}
        <ul><li>Swap Random mover for <b>Negamax search</b> and plug in a <b>Hand-crafted evaluation</b> with <b>Material</b>: now it looks ahead and counts pieces.</li>
        <li>Add <b>Iterative deepening</b>, then <b>Alpha-beta pruning</b>, and watch the engine get stronger; right-click any block and choose <i>Explain this block</i>.</li>
        <li>After each change, build again (step 10) and let the new version play the old one.</li></ul>
-       <p>The <a href="guide.html#Home" target="_blank" rel="noopener">guide</a> shows how to change blocks, make your own and build on them.</p>`,
+       <p>The <a href="guide.html#Home" target="_blank" rel="noopener">guide</a> shows how to change blocks, make your own and build on them. Stuck, or have an idea? Click <b>Feedback</b> at the top.</p>`,
   },
 ];
 

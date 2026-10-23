@@ -240,6 +240,7 @@ export function generateCargoToml(ws: Workspace): string {
     'version = "0.1.0"',
     'edition = "2021"',
     `authors = [${rustString(ws.engine.author)}]`,
+    'license = "MIT"',
     "",
     "# A standalone project, even when unpacked inside another Cargo workspace.",
     "[workspace]",
@@ -255,6 +256,41 @@ export function generateCargoToml(ws: Workspace): string {
     "",
   ].join("\n");
 }
+
+/**
+ * The exported engine's license. The engine is its author's; the template code
+ * it started from is MIT licensed by WG, so that notice stays with it.
+ */
+export function generateLicense(ws: Workspace): string {
+  const author = ws.engine.author.trim() || "the author";
+  return [
+    "MIT License",
+    "",
+    `Copyright (c) ${author}`,
+    "Copyright (c) 2026 WG (the Chess From Scratch templates this engine started from)",
+    "",
+    MIT_TEXT,
+  ].join("\n");
+}
+
+const MIT_TEXT = `Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+`;
 
 function generateReadme(ws: Workspace): string {
   const bin = toCrateName(ws.engine.name);
@@ -301,6 +337,13 @@ fastchess -engine cmd=./new name=new -engine cmd=./old name=old \\
 
 or submit it to an [OpenBench](https://github.com/AndyGrant/OpenBench)
 instance, which uses the \`bench\` command above.
+
+## License
+
+This engine is yours: use it, change it, share it or sell it. It comes with
+the MIT license (\`LICENSE\`), and you may put your own code under any license
+you like. Keep the MIT notice for the parts that came from Chess From Scratch's
+templates (the line with WG in \`LICENSE\`).
 
 ## Files
 
@@ -366,6 +409,7 @@ export function generateProject(ws: Workspace, options: GenerateOptions = {}): G
   return [
     { path: "Cargo.toml", contents: generated(generateCargoToml(ws), "Cargo.toml") },
     { path: "README.md", contents: generateReadme(ws) },
+    { path: "LICENSE", contents: generateLicense(ws) },
     { path: ".gitignore", contents: GITIGNORE },
     { path: ".cargo/config.toml", contents: CARGO_CONFIG },
     { path: "workspace.json", contents: `${JSON.stringify(ws, null, 2)}\n` },

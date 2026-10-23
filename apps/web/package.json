@@ -2,6 +2,7 @@
   "name": "@cfs/web",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
     "predev": "npm run embed -w @cfs/codegen && node scripts/copy-blockly-media.mjs",

@@ -2,6 +2,7 @@
 name = "cfs-reference"
 description = "Generator output for the workspace with every MVP block; its bench node count is the golden fingerprint."
 publish = false
+license = "MIT"
 edition.workspace = true
 version.workspace = true
 rust-version.workspace = true

@@ -1,0 +1,11 @@
+name: Idea or question
+description: A new block, a better explanation, something you got stuck on.
+labels: [idea]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+      description: What do you want to do, and why? If you got stuck, tell us where.
+    validations:
+      required: true

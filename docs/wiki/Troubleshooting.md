@@ -53,3 +53,7 @@ Add **Iterative deepening**. Without it, Negamax searches a fixed depth on every
 
 **The engine is very slow.**
 Build with `--release`. Without Alpha-beta pruning, searches deeper than 4 or 5 moves take a long time.
+
+## Still stuck?
+
+Open an issue and tell us what happened: see [Feedback and contributing](Feedback-And-Contributing).

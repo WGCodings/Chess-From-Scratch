@@ -27,3 +27,7 @@ You don't need to know Rust to start. You will pick it up on the way, one block 
 
 - [Block file reference](Block-File-Reference): every line a block file can have.
 - [Problems and fixes](Troubleshooting): when something does not work.
+
+## Help make it better
+
+- [Feedback and contributing](Feedback-And-Contributing): report a bug, share an idea or a block, or help with the code.

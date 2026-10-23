@@ -245,3 +245,23 @@ compiles is up to cargo.
 
 Sprint 5 (editable and custom blocks) is done; Sprint 6 (export and launch) is next. See the MVP plan doc in the
 Claude project for scope and the sprint roadmap.
+
+## Feedback and contributing
+
+Found a bug or have an idea? Open an issue:
+https://github.com/WGCodings/Chess-From-Scratch/issues (the app's *Feedback*
+button goes there too). See [CONTRIBUTING.md](CONTRIBUTING.md) for pull requests.
+
+## License
+
+- The app, the code generator and everything else in this repository: the
+  GNU Affero General Public License v3.0 ([LICENSE](LICENSE)). You may use,
+  study, change and share it; if you run a changed version as a website, you
+  must offer its source code to its users under the same license.
+- The Rust templates (`packages/codegen/templates/`) and example blocks
+  (`packages/codegen/examples/`): the MIT license (the `LICENSE` file in each
+  folder). This code ends up in the engines people build, and those engines
+  belong to their makers: every export carries an MIT `LICENSE` with its
+  author's name.
+- cozy-chess, the chess library exported engines use, is MIT licensed by its
+  authors.

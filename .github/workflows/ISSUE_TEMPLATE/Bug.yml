@@ -1,0 +1,21 @@
+name: Something broke
+description: The app, the guide or an exported engine doesn't work as expected.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead? A screenshot helps.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can we see it too?
+      description: The steps, one per line. If it is about your engine, attach your .cfs file (Save in the app).
+  - type: input
+    id: where
+    attributes:
+      label: Browser and computer
+      placeholder: Chrome on Windows 11
