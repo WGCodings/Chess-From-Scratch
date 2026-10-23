@@ -561,6 +561,36 @@ await test("the drawer stays open after dragging a block out, and My blocks has 
   }
 });
 
+await test("a first visit is empty, stays empty after a reload, and shows no old code", async (p) => {
+  const blocks = () => p.evaluate(() => (window as unknown as { __cfsWorkspace: import("blockly").WorkspaceSvg }).__cfsWorkspace.getAllBlocks(false).length);
+  check((await blocks()) === 0, `blocks on a first visit: ${await blocks()}`);
+  check(await p.locator(".canvas-empty").isVisible(), "no empty-canvas card");
+  check((await p.locator("#code").innerText()).includes("No code yet"), "code pane not empty");
+  await p.reload();
+  await p.waitForTimeout(800);
+  check((await blocks()) === 0, "blocks came back after a reload");
+  // Remove the search from a complete engine: the old code goes away.
+  await template(p, "starter");
+  check((await p.locator("#code").innerText()).includes("fn negamax"), "starter code missing");
+  await p.evaluate(() => {
+    const bw = (window as unknown as { __cfsWorkspace: import("blockly").WorkspaceSvg }).__cfsWorkspace;
+    bw.getBlocksByType("cfs_negamax", false)[0]!.dispose(true);
+  });
+  await p.waitForTimeout(600);
+  const code = await p.locator("#code").innerText();
+  check(code.includes("No code yet") && code.includes("Plug a search") && !code.includes("fn negamax"), `code pane: ${code.slice(0, 200)}`);
+});
+
+await test("the guide shows its pages and links between them", async (p) => {
+  await p.goto(url.replace(/\/?$/, "/") + "guide.html");
+  await p.waitForSelector(".guide-main h1");
+  check((await p.locator(".guide-main h1").innerText()) === "Chess From Scratch", await p.locator(".guide-main h1").innerText());
+  await p.locator(".guide-main a", { hasText: "Your first engine" }).first().click();
+  await p.waitForTimeout(200);
+  check((await p.locator(".guide-main h1").innerText()) === "Your first engine", "wiki link did not open the page");
+  check((await p.locator(".guide-nav a.current").innerText()) === "Your first engine", "sidebar does not show the page");
+});
+
 await test("the tutorial builds a random mover from an empty canvas", async (p) => {
   // A first visit gets the offer.
   await p.evaluate(() => {
@@ -570,7 +600,8 @@ await test("the tutorial builds a random mover from an empty canvas", async (p) 
   await p.reload();
   await p.waitForSelector(".tut-offer", { timeout: 4000 });
   await p.locator('.tut [data-act="start"]').click();
-  await p.locator('.tut [data-act="action"]').click(); // empty the canvas (the confirm is accepted)
+  // The canvas is already empty on a first visit, so there is nothing to clear.
+  if (await p.locator('.tut [data-act="action"]').count()) await p.locator('.tut [data-act="action"]').click();
   await p.waitForTimeout(500);
   check((await p.locator(".tut-state.ok").count()) === 1, "empty canvas not detected");
   await p.locator('.tut [data-act="next"]').click();

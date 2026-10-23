@@ -70,6 +70,15 @@ reference crate.
 
 ## The editor
 
+A first visit starts with an empty canvas (it stays empty after a reload);
+the code pane says what is missing until the engine is complete.
+
+**Guide** (top bar): beginner pages on building, changing and making blocks,
+in `docs/wiki/`. The site shows them at `guide.html`; they are written as
+GitHub wiki pages too: after creating any first page in the repository's Wiki
+tab, `bash scripts/publish-wiki.sh` (or `scripts/publish-wiki.ps1` on Windows)
+copies them there.
+
 **Tutorial** (top bar, offered once on a first visit): a guided first engine.
 It empties the canvas, has you drag an Engine block and a Random mover, walks
 through the generated code (`search.rs`, `uci.rs`, `main.rs`), then Link folder

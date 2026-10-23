@@ -369,7 +369,7 @@ function renderTree(): void {
     }
     into.append(ul);
   };
-  renderDir(buildTree(files.map((f) => f.path)), "", 1, header);
+  renderDir(buildTree(codeBlocked ? [] : files.map((f) => f.path)), "", 1, header);
   treeEl.replaceChildren(list);
 }
 
@@ -398,6 +398,12 @@ function lineClasses(path: string): string[] {
   return extra;
 }
 
+/** The "your canvas is empty" card. */
+let emptyHint: HTMLElement | null = null;
+
+/** Why there is no code to show (the engine is not complete), or null. */
+let codeBlocked: string | null = null;
+
 /** Lines the tutorial points at. */
 let tutorialMark: { path: string; start: number; count: number } | null = null;
 let tutorial: Tutorial | null = null;
@@ -424,7 +430,14 @@ function showFile(path: string, scrollTo?: number): void {
     text: h.text,
     title: `Hook "${h.name}": ${HOOKS[h.name]?.description ?? "added by one of your blocks."} Blocks add code here with // @hook ${h.name}, or type code below it in Edit code.`,
   }));
-  codeEl.innerHTML = file ? renderCode(file.contents, lineClasses(path), removed, ghosts) : "";
+  if (codeBlocked) {
+    codeEl.innerHTML = "";
+    const box = el("div", "code-empty");
+    box.append(el("strong", undefined, "No code yet"), el("p", undefined, codeBlocked), el("p", undefined, "Your engine's Rust code appears here as soon as the engine is complete."));
+    codeEl.append(box);
+  } else {
+    codeEl.innerHTML = file ? renderCode(file.contents, lineClasses(path), removed, ghosts) : "";
+  }
   renderTree();
   if (scrollTo !== undefined) {
     const rows = codeEl.querySelectorAll<HTMLElement>(".ln:not(.removed):not(.hook)");
@@ -715,6 +728,7 @@ function refresh(): void {
   }
   updateCustomBlocks();
   tutorial?.update();
+  updateEmptyHint();
   const issues: Issue[] = problems.map((message) => ({ level: "error", message }));
   if (workspace) issues.push(...validate(workspace));
   const blocking = issues.some((i) => i.level === "error");
@@ -728,6 +742,8 @@ function refresh(): void {
     }
   }
   codeEl.classList.toggle("stale", blocking);
+  // No code to show until the engine is complete: say what is missing instead of old code.
+  codeBlocked = blocking ? (issues.find((i) => i.level === "error")?.message ?? "Fix the problems under Status.") : null;
   exportBtn.disabled = blocking;
   renderIssues(issues);
 
@@ -1531,8 +1547,9 @@ function restore(): boolean {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
+      // An empty canvas is a saved state too: it stays empty after a reload.
       Blockly.serialization.workspaces.load(JSON.parse(raw), bw);
-      return bw.getAllBlocks(false).some((b) => skeletonKind(b.type) === "engine");
+      return true;
     }
     // An older autosave: its engine always had iterative deepening, draw
     // detection and a tapered evaluation, so those become blocks.
@@ -1678,6 +1695,26 @@ $("copy").addEventListener("click", async () => {
   }
 });
 
+// An empty canvas says how to start.
+emptyHint = el("div", "canvas-empty");
+emptyHint.innerHTML = `<strong>Your canvas is empty</strong>
+  <p>Drag an <b>Engine</b> block from the drawer on the left, or pick a template under <b>New</b>.</p>
+  <p>First time? The tutorial builds a working engine with you in about ten minutes.</p>`;
+const hintBtn = el("button", "btn primary", "Start the tutorial");
+hintBtn.type = "button";
+hintBtn.addEventListener("click", () => {
+  tutorial?.start();
+  updateEmptyHint();
+});
+emptyHint.append(hintBtn);
+$("workspace").append(emptyHint);
+function updateEmptyHint(): void {
+  if (emptyHint) emptyHint.hidden = bw.getAllBlocks(false).length > 0 || !!tutorial?.running;
+}
+bw.addChangeListener((e: Blockly.Events.Abstract) => {
+  if (!e.isUiEvent) updateEmptyHint();
+});
+
 // Start ---------------------------------------------------------------------
 
 // The tutorial: a first engine from an empty canvas to playing it in a GUI.
@@ -1727,14 +1764,18 @@ tutorial = new Tutorial({
     showFile(activeFile);
   },
 });
-$("tutorial-btn").addEventListener("click", () => (tutorial!.running ? tutorial!.stop() : tutorial!.start()));
+$("tutorial-btn").addEventListener("click", () => {
+  if (tutorial!.running) tutorial!.stop();
+  else tutorial!.start();
+  updateEmptyHint();
+});
 
+// A first visit starts with an empty canvas (and the tutorial offer).
 updateCustomBlocks();
-if (restore()) {
-  showEngineTop();
-  refresh();
-  suppressTour = false;
-} else {
-  load(starterWorkspace());
-}
+restore();
+showEngineTop();
+refresh();
+save();
+suppressTour = false;
+updateEmptyHint();
 tutorial.resumeOrOffer();
