@@ -31,6 +31,19 @@ export interface Desktop {
   openUrl(url: string): Promise<void>;
   /** Lets the user pick a folder; null when they cancel. */
   pickFolder(title: string): Promise<string | null>;
+  /** Asks where to save a file; null when they cancel. */
+  pickSaveFile(defaultName: string, filter: FileFilter): Promise<string | null>;
+  /** Asks for a file to open; null when they cancel. */
+  pickOpenFile(filter: FileFilter): Promise<string | null>;
+  readFile(path: string): Promise<Uint8Array>;
+  writeFile(path: string, data: Uint8Array): Promise<void>;
+  /** A yes/no question in a native dialog (window.confirm when absent). */
+  ask?(message: string, title: string): Promise<boolean>;
+}
+
+export interface FileFilter {
+  name: string;
+  extensions: string[];
 }
 
 declare global {
@@ -64,6 +77,14 @@ function tauriDesktop(): Desktop {
     closeTerminal: (id) => call("close_terminal", { id }),
     revealFolder: async (dir) => (await import("@tauri-apps/plugin-opener")).revealItemInDir(dir),
     openUrl: async (url) => (await import("@tauri-apps/plugin-opener")).openUrl(url),
+    pickSaveFile: async (defaultPath, filter) => (await import("@tauri-apps/plugin-dialog")).save({ defaultPath, filters: [filter] }),
+    pickOpenFile: async (filter) => {
+      const picked = await (await import("@tauri-apps/plugin-dialog")).open({ multiple: false, filters: [filter] });
+      return typeof picked === "string" ? picked : null;
+    },
+    readFile: async (path) => new Uint8Array(await call<ArrayBuffer>("read_file", { path })),
+    writeFile: (path, data) => call("write_file", { path, data: Array.from(data) }),
+    ask: async (message, title) => (await import("@tauri-apps/plugin-dialog")).ask(message, { title, kind: "warning" }),
     pickFolder: async (title) => {
       const picked = await (await import("@tauri-apps/plugin-dialog")).open({ directory: true, title });
       return typeof picked === "string" ? picked : null;
@@ -80,3 +101,8 @@ export const desktop: Desktop | null =
 export const isDesktop = desktop !== null;
 
 export const DESKTOP_DOWNLOAD_URL = "https://github.com/WGCodings/Chess-From-Scratch/releases/latest";
+
+/** Asks the user to confirm: a native dialog in the desktop app, window.confirm on the website. */
+export async function confirmAction(message: string, title = "Chess From Scratch"): Promise<boolean> {
+  return desktop?.ask ? desktop.ask(message, title) : window.confirm(message);
+}

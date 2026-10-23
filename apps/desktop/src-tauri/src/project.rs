@@ -74,6 +74,16 @@ pub fn write(dir: &Path, files: &[ProjectFile]) -> io::Result<()> {
     Ok(())
 }
 
+/// Writes `data` to `path` by way of a temporary file next to it.
+pub fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("cfs-saving");
+    fs::write(&tmp, data)?;
+    fs::rename(&tmp, path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,6 +130,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert!(write(dir.path(), &[file("../evil.rs", "x")]).is_err());
         assert!(write(dir.path(), &[file("/etc/evil", "x")]).is_err());
+    }
+
+    #[test]
+    fn saves_whole_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("sub/engine.cfs");
+        write_atomic(&p, b"one").unwrap();
+        write_atomic(&p, b"two").unwrap();
+        assert_eq!(fs::read(&p).unwrap(), b"two");
+        assert_eq!(fs::read_dir(p.parent().unwrap()).unwrap().count(), 1);
     }
 
     #[test]

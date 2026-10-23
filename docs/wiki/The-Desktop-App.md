@@ -65,7 +65,9 @@ Each engine gets its own folder, named after the engine:
 
 The built program is in `target/release/` inside that folder. Add it to a chess GUI to play against it.
 
-Your blocks and projects are saved inside the app, like on the website. Use **Save** to keep a `.cfs` file of a project.
+Each [branch](Branches) gets its own folder (`<engine>-<branch>`), so the main version and a branch can both stay built.
+
+Your engine, its branches and your blocks are saved inside the app, like on the website. **Save** asks where to put a `.cfs` file once; after that the app keeps that file up to date by itself. **Open** reads a `.cfs` file from your computer.
 
 ## Coming next
 

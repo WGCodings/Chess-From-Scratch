@@ -36,6 +36,8 @@ offline. Download it from the
   reductions, quiescence search, killers, a tapered evaluation and more.
   Right-click any block to see what it does, line by line.
 - Change any block, write your own, and build one on top of another.
+- Try ideas in branches: clone your engine, change it, see exactly what
+  changed, then keep it or delete it.
 - Write code in VS Code: link a folder and your changes come back as blocks.
 - Export a complete Rust project with a `bench` command, ready for
   [fastchess](https://github.com/Disservin/fastchess) and

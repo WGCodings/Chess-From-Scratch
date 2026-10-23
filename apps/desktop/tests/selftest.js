@@ -33,6 +33,14 @@
     document.querySelector("#terminal-btn").click();
     await waitFor("terminal prompt", () => (document.querySelector("#dock .xterm-rows")?.textContent ?? "").trim().length > 0, 30);
     log.push(`terminal: ${document.querySelector("#dock .xterm-rows").textContent.trim().slice(0, 80)}`);
+    // Saving files: bytes in, the same bytes out.
+    const inv = window.__TAURI_INTERNALS__.invoke;
+    const dir = await inv("default_project_dir", { name: "selftest-files" });
+    const path = `${dir}/t.cfs`;
+    await inv("write_file", { path, data: [1, 2, 3, 250] });
+    const back = new Uint8Array(await inv("read_file", { path }));
+    if (back.join(",") !== "1,2,3,250") throw new Error(`read_file gave ${back.join(",")}`);
+    log.push("write_file/read_file round trip");
     log.push("--- engine output ---", ...[...document.querySelectorAll("#dock .dock-output div")].slice(-12).map((d) => d.textContent));
     await report(true);
   } catch (err) {

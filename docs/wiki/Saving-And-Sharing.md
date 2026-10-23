@@ -4,18 +4,20 @@
 
 | What | Where |
 |---|---|
-| Your current canvas | saved in your browser after every change. Close the tab and it's still there. |
+| Your engine and its branches | saved in your browser (or the desktop app) after every change. Close it and it's still there. |
 | Your blocks | in **My blocks**, also in your browser, for every project. |
-| A project | **Save** downloads a `.cfs` file. |
+| A project | **Save** downloads a `.cfs` file. In the desktop app it asks where to save it once, then keeps that file up to date. |
 | The Rust code | **Export Rust project** downloads a zip. |
 
 Your browser's storage is not a backup. Clearing your browser data removes it. Save a `.cfs` file of anything you want to keep.
 
 ## .cfs files
 
-**Save** gives you one `.cfs` file with your canvas and all your own blocks inside. **Open** reads it back, on this computer or another one. Blocks you don't have yet are added to **My blocks**.
+**Save** gives you one `.cfs` file with your engine, all its [branches](Branches), their history and all your own blocks inside. **Open** reads it back, on this computer or another one. Blocks you don't have yet are added to **My blocks**.
 
-A `.cfs` file is a zip. Inside are `workspace.json` and your blocks as files in `blocks/<slot>/`.
+In the desktop app, **Save** asks for a place the first time. After that every change is saved to that file by itself. **Shift-click Save** to save a copy somewhere else.
+
+A `.cfs` file is a zip. Inside are `workbench.json` (every branch and the history), `workspace.json` (the open branch) and its blocks as files in `blocks/<slot>/`. Older `.cfs` files without `workbench.json` open as an engine with one branch.
 
 ## My blocks
 

@@ -30,6 +30,10 @@ import {
   toCrateName,
   validate,
   viewOf,
+  newWorkbench,
+  parseWorkbench,
+  updateCurrent,
+  type Workbench,
   type CodeResult,
   type CustomSlot,
   type Diagnostic,
@@ -74,10 +78,16 @@ import { misplaced, missingFor, presentIn, requirementLabel, setRuleSources } fr
 import { Tutorial } from "./tutorial";
 import { Dock } from "./dock";
 import { installDesktopLinks } from "./links";
-import { isDesktop } from "./platform";
+import { confirmAction, desktop, isDesktop } from "./platform";
+import { BranchPanel } from "./branches";
 import "./style.css";
 
 const STORAGE_KEY = "cfs.blockly.v2";
+/** The workbench: every branch of the engine and its history. */
+const WORKBENCH_KEY = "cfs.workbench.v1";
+/** Desktop app: the file the workbench is saved to (and autosaved). */
+const SAVE_PATH_KEY = "cfs.workbench.path";
+const CFS_FILTER = { name: "Chess From Scratch project", extensions: ["cfs"] };
 /** Autosave from before iterative deepening, draw detection and tapering were blocks. */
 const OLD_STORAGE_KEY = "cfs.blockly.v1";
 /** The files that are "your engine"; the rest is machinery. */
@@ -268,6 +278,18 @@ const toastEl = $("toast");
 let files: GeneratedFile[] = [];
 let activeFile = "src/search.rs";
 let current: Workspace | null = null;
+/** All branches of the engine; the open one is on the canvas. */
+let wbench: Workbench = newWorkbench(emptyWorkspace());
+let branchPanel: BranchPanel | null = null;
+let savePath: string | null = desktop ? readStored(SAVE_PATH_KEY) : null;
+
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
 let focusRegion: string | null = null;
 const collapsed = new Set<string>();
 
@@ -1543,17 +1565,103 @@ Object.assign(window, { __cfsLinkFolder: (h: FileSystemDirectoryHandle) => linkF
 
 // Persistence ---------------------------------------------------------------
 
+/** Stores the canvas (and its engine, when complete) in the open branch. */
+function syncBranch(): void {
+  const b = wbench.branches[wbench.current];
+  if (!b) return;
+  b.canvas = Blockly.serialization.workspaces.save(bw);
+  if (current) updateCurrent(wbench, current);
+}
+
+function storeWorkbench(): void {
+  try {
+    localStorage.setItem(WORKBENCH_KEY, JSON.stringify(wbench));
+  } catch {
+    // Storage can be unavailable (private mode) or full; autosave is a convenience.
+  }
+}
+
+let fileTimer: number | undefined;
+let fileSaveFailed = false;
+/** Desktop app: keeps the saved .cfs file up to date. */
+function scheduleFileSave(): void {
+  if (!desktop || !savePath) return;
+  window.clearTimeout(fileTimer);
+  fileTimer = window.setTimeout(() => {
+    const path = savePath;
+    if (!path) return;
+    desktop!
+      .writeFile(path, bundle().data)
+      .then(() => (fileSaveFailed = false))
+      .catch((err) => {
+        if (!fileSaveFailed) toast(`Could not save ${path}: ${err}`);
+        fileSaveFailed = true;
+      });
+  }, 1500);
+}
+
 function save(): void {
   void folder?.writeOut();
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(Blockly.serialization.workspaces.save(bw)));
-  } catch {
-    // Storage can be unavailable (private mode); autosave is a convenience.
+  syncBranch();
+  storeWorkbench();
+  scheduleFileSave();
+}
+
+/** Reads a workbench.json: branches whose workspaces are read like workspace files. */
+function readWorkbenchJson(text: string): Workbench {
+  const data = JSON.parse(text) as Record<string, unknown>;
+  if (!data || typeof data !== "object" || !("branches" in data)) return newWorkbench(parseWorkspaceFile(text));
+  const branches = data.branches as Record<string, { workspace: unknown; base?: unknown }>;
+  for (const b of Object.values(branches)) {
+    b.workspace = parseWorkspaceFile(JSON.stringify(b.workspace));
+    if (b.base) b.base = parseWorkspaceFile(JSON.stringify(b.base));
   }
+  return parseWorkbench(data);
+}
+
+/** Puts the open branch on the canvas, without a change tour. */
+function showBranch(): void {
+  const b = wbench.branches[wbench.current]!;
+  if (editing) stopEditing();
+  if (tour) endTour();
+  setProject(b.workspace.customBlocks ?? {});
+  updateCustomBlocks();
+  if (b.canvas) {
+    suppressTour = true;
+    Blockly.Events.disable();
+    try {
+      bw.clear();
+      Blockly.serialization.workspaces.load(b.canvas as object, bw);
+    } finally {
+      Blockly.Events.enable();
+    }
+    files = [];
+    lastKeys = new Set();
+    refresh();
+    lastKeys = placedKeys(current);
+    showEngineTop();
+    suppressTour = false;
+  } else {
+    load(b.workspace);
+  }
+  branchPanel?.refresh();
+}
+
+/** Replaces the whole workbench (a new engine or an opened file). */
+function setWorkbench(wb: Workbench): void {
+  wbench = wb;
+  showBranch();
+  save();
 }
 
 function restore(): boolean {
   try {
+    const stored = localStorage.getItem(WORKBENCH_KEY);
+    if (stored) {
+      wbench = readWorkbenchJson(stored);
+      showBranch();
+      return true;
+    }
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       // An empty canvas is a saved state too: it stays empty after a reload.
@@ -1617,44 +1725,110 @@ $<HTMLSelectElement>("template").addEventListener("change", (e) => {
   const make = TEMPLATES[select.value];
   select.value = "";
   if (!make) return;
-  if (bw.getAllBlocks(false).length > 0 && !window.confirm("Replace the current workspace?")) return;
-  setProject({});
-  load(make());
-  toast("New engine created");
+  void (async () => {
+    const branches = Object.keys(wbench.branches).length;
+    const what = branches > 1 ? `the current engine and its ${branches} branches` : "the current engine";
+    if ((bw.getAllBlocks(false).length > 0 || branches > 1) && !(await confirmAction(`Replace ${what}? Save it first if you want to keep it.`))) return;
+    forgetSavePath();
+    setWorkbench(newWorkbench(make()));
+    toast("New engine created");
+  })();
 });
 
-$("open").addEventListener("click", () => fileInput.click());
+$("open").addEventListener("click", () => {
+  if (desktop) void openFromDisk();
+  else fileInput.click();
+});
 
-/** Reads a `.cfs` project bundle: workspace.json plus blocks/*.block.rs. */
-function readBundle(data: Uint8Array): Workspace {
+/** Reads a `.cfs` project bundle: workbench.json (all branches), or workspace.json plus blocks/*.block.rs. */
+function readBundle(data: Uint8Array): Workbench {
   const entries = unzipSync(data);
-  const strip = (p: string) => p.replace(/^[^/]+\/(?=workspace\.json$|blocks\/)/, "");
+  const strip = (p: string) => p.replace(/^[^/]+\/(?=workspace\.json$|workbench\.json$|blocks\/)/, "");
   const files = new Map(Object.entries(entries).map(([p, d]) => [strip(p), d]));
+  const bench = files.get("workbench.json");
   const json = files.get("workspace.json");
-  if (!json) throw new Error("This bundle has no workspace.json.");
-  const ws = parseWorkspaceFile(strFromU8(json));
-  // Block files in blocks/ win: they may have been edited outside the app.
+  if (!bench && !json) throw new Error("This bundle has no workspace.json.");
+  const wb = bench ? readWorkbenchJson(strFromU8(bench)) : newWorkbench(parseWorkspaceFile(strFromU8(json!)));
+  // Block files in blocks/ win for the open branch: they may have been edited outside the app.
+  const open = wb.branches[wb.current]!;
   for (const [p, d] of files) {
     const id = blockIdOfPath(p);
-    if (id) ws.customBlocks![id] = strFromU8(d);
+    if (id && (!bench || open.workspace.customBlocks?.[id] !== undefined)) {
+      open.workspace.customBlocks = { ...open.workspace.customBlocks, [id]: strFromU8(d) };
+      delete open.canvas;
+    }
   }
-  return ws;
+  return wb;
 }
 
-/** Opens a workspace: its blocks join the project, and My blocks when new there. */
-function openWorkspace(ws: Workspace, name: string): void {
+/** Opens a workbench: its blocks join the project, and My blocks when new there. */
+function openWorkbench(wb: Workbench, name: string): void {
   let added = 0;
-  for (const [id, src] of Object.entries(ws.customBlocks ?? {})) {
-    if (library[id] === undefined) {
-      library[id] = src;
-      added++;
+  for (const b of Object.values(wb.branches)) {
+    for (const [id, src] of Object.entries(b.workspace.customBlocks ?? {})) {
+      if (library[id] === undefined) {
+        library[id] = src;
+        added++;
+      }
     }
   }
   if (added) saveLibrary();
-  setProject(ws.customBlocks ?? {});
-  updateCustomBlocks();
-  load(ws);
-  toast(`Opened ${name}${added ? `; ${added} block${added > 1 ? "s" : ""} added to My blocks` : ""}`);
+  setWorkbench(wb);
+  const n = Object.keys(wb.branches).length;
+  toast(`Opened ${name}${n > 1 ? ` with ${n} branches` : ""}${added ? `; ${added} block${added > 1 ? "s" : ""} added to My blocks` : ""}`);
+}
+
+function forgetSavePath(): void {
+  savePath = null;
+  try {
+    localStorage.removeItem(SAVE_PATH_KEY);
+  } catch {
+    /* convenience */
+  }
+}
+
+function rememberSavePath(path: string): void {
+  savePath = path;
+  try {
+    localStorage.setItem(SAVE_PATH_KEY, path);
+  } catch {
+    /* convenience */
+  }
+}
+
+/** Desktop app: open a .cfs project (or a workspace or block file) from disk. */
+async function openFromDisk(): Promise<void> {
+  if (!desktop) return;
+  try {
+    const path = await desktop.pickOpenFile({ name: "Chess From Scratch files", extensions: ["cfs", "zip", "json", "rs"] });
+    if (!path) return;
+    const name = path.split(/[\\/]/).pop() ?? path;
+    const data = await desktop.readFile(path);
+    if (name.toLowerCase().endsWith(".rs")) return importBlockFile(name, strFromU8(data));
+    if (/\.(cfs|zip)$/i.test(name)) {
+      openWorkbench(readBundle(data), name);
+      if (/\.cfs$/i.test(name)) rememberSavePath(path);
+    } else {
+      forgetSavePath();
+      openWorkbench(readWorkbenchJson(strFromU8(data)), name);
+    }
+  } catch (err) {
+    toast(err instanceof Error ? err.message : String(err));
+  }
+}
+
+/** The .cfs file: every branch (workbench.json), plus the open branch as workspace.json and blocks/ for other tools. */
+function bundle(): { name: string; data: Uint8Array } {
+  syncBranch();
+  const open = wbench.branches[wbench.current]!;
+  const workspace = current ?? open.workspace;
+  const name = toCrateName(workspace.engine.name);
+  const entries: Record<string, Uint8Array> = {
+    "workbench.json": strToU8(`${JSON.stringify(wbench, null, 2)}\n`),
+    "workspace.json": strToU8(`${JSON.stringify(workspace, null, 2)}\n`),
+  };
+  for (const [id, src] of Object.entries(workspace.customBlocks ?? {})) entries[blockFilePath(id, src)] = strToU8(src);
+  return { name, data: zipSync(entries, { level: 6 }) };
 }
 
 blockInput.addEventListener("change", async () => {
@@ -1669,24 +1843,34 @@ fileInput.addEventListener("change", async () => {
   if (!file) return;
   try {
     if (file.name.toLowerCase().endsWith(".rs")) importBlockFile(file.name, await file.text());
-    else if (/\.(cfs|zip)$/i.test(file.name)) openWorkspace(readBundle(new Uint8Array(await file.arrayBuffer())), file.name);
-    else openWorkspace(parseWorkspaceFile(await file.text()), file.name);
+    else if (/\.(cfs|zip)$/i.test(file.name)) openWorkbench(readBundle(new Uint8Array(await file.arrayBuffer())), file.name);
+    else openWorkbench(readWorkbenchJson(await file.text()), file.name);
   } catch (err) {
     toast(err instanceof Error ? err.message : "Could not open that file.");
   }
 });
 
-$("save").addEventListener("click", () => {
+async function saveProject(saveAs: boolean): Promise<void> {
   const { workspace } = readWorkspace(bw, sourceOf);
-  if (!workspace) return toast("Add an Engine block first.");
-  const name = toCrateName(workspace.engine.name);
-  const entries: Record<string, Uint8Array> = {
-    "workspace.json": strToU8(`${JSON.stringify(workspace, null, 2)}\n`),
-  };
-  for (const [id, src] of Object.entries(workspace.customBlocks ?? {})) entries[blockFilePath(id, src)] = strToU8(src);
-  download(`${name}.cfs`, zipSync(entries, { level: 6 }), "application/zip");
-  toast(`Saved ${name}.cfs`);
-});
+  if (!workspace && !Object.values(wbench.branches).some((b) => b.workspace)) return toast("Add an Engine block first.");
+  const { name, data } = bundle();
+  if (!desktop) {
+    download(`${name}.cfs`, data as Uint8Array<ArrayBuffer>, "application/zip");
+    toast(`Saved ${name}.cfs`);
+    return;
+  }
+  try {
+    const path = !saveAs && savePath ? savePath : await desktop.pickSaveFile(`${name}.cfs`, CFS_FILTER);
+    if (!path) return;
+    await desktop.writeFile(path, data);
+    rememberSavePath(path);
+    toast(`Saved to ${path}. Changes are saved there automatically from now on.`);
+  } catch (err) {
+    toast(`Could not save: ${err}`);
+  }
+}
+
+$("save").addEventListener("click", (e) => void saveProject(e.shiftKey));
 
 exportBtn.addEventListener("click", () => {
   if (!current) return;
@@ -1736,7 +1920,9 @@ const dock = new Dock($("dock"), {
   project: () => {
     if (!current) return { problem: "add an Engine block first." };
     if (codeBlocked) return { problem: codeBlocked };
-    return { name: toCrateName(current.engine.name), files: files.map((f) => ({ path: f.path, contents: f.contents })) };
+    // Every branch builds in its own folder, so two versions can be tested against each other.
+    const branch = wbench.current === wbench.main ? "" : `-${wbench.current}`;
+    return { name: `${toCrateName(current.engine.name)}${branch}`, files: files.map((f) => ({ path: f.path, contents: f.contents })) };
   },
   layoutChanged: () => Blockly.svgResize(bw),
   stateChanged: () => tutorial?.update(),
@@ -1827,6 +2013,16 @@ $("tutorial-btn").addEventListener("click", () => {
 // A first visit starts with an empty canvas (and the tutorial offer).
 updateCustomBlocks();
 restore();
+branchPanel = new BranchPanel($<HTMLButtonElement>("branch-btn"), {
+  workbench: () => wbench,
+  sync: syncBranch,
+  show: () => showBranch(),
+  changed: () => {
+    storeWorkbench();
+    scheduleFileSave();
+  },
+  toast,
+});
 showEngineTop();
 refresh();
 save();

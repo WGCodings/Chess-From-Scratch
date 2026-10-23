@@ -10,7 +10,8 @@ apps/
   web/             the editor (Vite + TypeScript + Blockly + CodeMirror) and the guide page
   desktop/         the desktop app (Tauri 2): the same editor plus build, run and a terminal
 packages/
-  codegen/         block catalogue, workspace format, Rust templates and project generator
+  codegen/         block catalogue, workspace format, Rust templates, project generator,
+                   and the workbench (branches, history, what changed: workbench.ts)
     templates/     every line of Rust an engine can contain (search, eval, uci, tt, ...)
     examples/      example block files shown under My blocks
 crates/

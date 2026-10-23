@@ -14,6 +14,7 @@
 
 **Your engine**
 - [The desktop app](The-Desktop-App)
+- [Branches: try ideas safely](Branches)
 - [Build, test and play](Build-Test-Play)
 - [Saving and sharing](Saving-And-Sharing)
 

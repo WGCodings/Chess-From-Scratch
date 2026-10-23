@@ -33,6 +33,21 @@ fn write_project(dir: String, files: Vec<ProjectFile>) -> Result<(), String> {
     project::write(&PathBuf::from(dir), &files).map_err(|e| e.to_string())
 }
 
+/// Reads a file the user picked (a saved workbench).
+#[tauri::command]
+fn read_file(path: String) -> Result<tauri::ipc::Response, String> {
+    std::fs::read(&path)
+        .map(tauri::ipc::Response::new)
+        .map_err(|e| format!("Could not read {path}: {e}"))
+}
+
+/// Writes a file the user picked, through a temporary file so a crash never leaves half a file.
+#[tauri::command]
+fn write_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    project::write_atomic(std::path::Path::new(&path), &data)
+        .map_err(|e| format!("Could not save {path}: {e}"))
+}
+
 /// `cargo --version`, or an error when Rust is not installed.
 #[tauri::command]
 async fn rust_version() -> Result<String, String> {
@@ -121,6 +136,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             default_project_dir,
             write_project,
+            read_file,
+            write_file,
             rust_version,
             build_engine,
             start_engine,

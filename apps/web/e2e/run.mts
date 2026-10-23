@@ -583,6 +583,65 @@ await test("a first visit is empty, stays empty after a reload, and shows no old
   check(code.includes("No code yet") && code.includes("Plug a search") && !code.includes("fn negamax"), `code pane: ${code.slice(0, 200)}`);
 });
 
+const engineName = (p: Page) =>
+  p.evaluate(() => {
+    const bw = (window as unknown as { __cfsWorkspace: import("blockly").WorkspaceSvg }).__cfsWorkspace;
+    return String(bw.getAllBlocks(false).find((b) => b.getField("NAME") && b.type.includes("engine"))?.getFieldValue("NAME"));
+  });
+const setEngineName = (p: Page, name: string) =>
+  p.evaluate((n) => {
+    const bw = (window as unknown as { __cfsWorkspace: import("blockly").WorkspaceSvg }).__cfsWorkspace;
+    bw.getAllBlocks(false).find((b) => b.getField("NAME") && b.type.includes("engine"))!.setFieldValue(n, "NAME");
+  }, name);
+
+await test("branches: clone, change, switch, keep, and they survive a reload and a saved file", async (p) => {
+  await template(p, "starter");
+  const original = await engineName(p);
+  await p.click("#branch-btn");
+  await p.fill(".br-new input", "+ new name");
+  await p.locator(".br-new button").click();
+  await p.waitForTimeout(400);
+  check((await p.innerText("#branch-btn")).includes("+ new name"), `button: ${await p.innerText("#branch-btn")}`);
+  await p.keyboard.press("Escape");
+  await setEngineName(p, "Branchy");
+  await p.waitForTimeout(400);
+  await p.click("#branch-btn");
+  const changes = await p.locator('.br-item[data-branch="new-name"] .br-changes').innerText();
+  check(changes.includes(`Engine name: ${original} → Branchy`), `changes: ${changes}`);
+  if (process.env.CFS_SHOTS) await p.locator(".br").screenshot({ path: join(process.env.CFS_SHOTS, "branches.png") });
+  // Back to main: the canvas shows main's engine.
+  await p.locator('.br-item[data-branch="main"] button', { hasText: "Open" }).click();
+  await p.waitForTimeout(500);
+  check((await engineName(p)) === original, `main shows ${await engineName(p)}`);
+  // A reload keeps both branches.
+  await p.reload();
+  await p.waitForSelector(".blocklyToolboxCategory");
+  await p.waitForTimeout(500);
+  await p.click("#branch-btn");
+  check((await p.locator(".br-item").count()) === 2, "branches lost after reload");
+  // Save the file with both branches.
+  await p.keyboard.press("Escape");
+  const dl = p.waitForEvent("download");
+  await p.click("#save");
+  const path = join(mkdtempSync(join(tmpdir(), "cfs-")), "b.cfs");
+  await (await dl).saveAs(path);
+  // Keep the branch: main gets its engine.
+  await p.click("#branch-btn");
+  await p.locator('.br-item[data-branch="new-name"] .keep').click();
+  await p.waitForTimeout(600);
+  check((await p.locator(".br-item").count()) === 1, "branch not closed");
+  check((await engineName(p)) === "Branchy", `main after keep: ${await engineName(p)}`);
+  check((await p.locator(".br-history").innerText()).includes('Kept "+ new name"'), "no history line");
+  await p.keyboard.press("Escape");
+  // Opening the saved file brings both branches back.
+  await template(p, "empty");
+  await p.setInputFiles("#file", path);
+  await p.waitForTimeout(900);
+  check((await toast(p)).includes("2 branches"), `toast: ${await toast(p)}`);
+  await p.click("#branch-btn");
+  check((await p.locator(".br-item").count()) === 2, "saved branches not opened");
+});
+
 await test("importing a block file only accepts .block.rs files", async (p) => {
   await p.setInputFiles("#block-file", { name: "search.rs", mimeType: "text/plain", buffer: Buffer.from("fn main() {}") });
   await p.waitForTimeout(200);
@@ -607,6 +666,7 @@ function desktopMock(): void {
   const calls: unknown[][] = [];
   let onEvent: ((e: { kind: string; text: string }) => void) | null = null;
   let onTerm: ((d: string) => void) | null = null;
+  const disk: Record<string, Uint8Array> = {};
   (window as unknown as { __calls: unknown[][] }).__calls = calls;
   (window as unknown as { __cfsDesktopMock: unknown }).__cfsDesktopMock = {
     defaultProjectDir: async (name: string) => `/data/engines/${name}`,
@@ -642,6 +702,16 @@ function desktopMock(): void {
     revealFolder: async (dir: string) => void calls.push(["reveal", dir]),
     openUrl: async (url: string) => void calls.push(["url", url]),
     pickFolder: async () => null,
+    pickSaveFile: async (name: string) => `/home/me/${name}`,
+    pickOpenFile: async () => "/home/me/my-engine.cfs",
+    writeFile: async (path: string, data: Uint8Array) => {
+      calls.push(["writeFile", path, data.length]);
+      disk[path] = data;
+    },
+    readFile: async (path: string) => {
+      if (!disk[path]) throw new Error(`no file ${path}`);
+      return disk[path];
+    },
   };
 }
 const calls = (p: Page) => p.evaluate(() => (window as unknown as { __calls: unknown[][] }).__calls);
@@ -692,6 +762,30 @@ await test("desktop: Run says what is missing, and the terminal opens in the eng
   // Web links open in the browser.
   await p.click("#feedback-btn");
   check((await calls(p)).some((x) => x[0] === "url" && String(x[1]).includes("github.com")), "feedback link not opened in the browser");
+}, desktopMock);
+
+await test("desktop: Save writes the file, changes are saved to it, Open reads it back", async (p) => {
+  await template(p, "starter");
+  await p.click("#save");
+  await p.waitForTimeout(300);
+  check((await toast(p)).includes("/home/me/my-engine.cfs"), `toast: ${await toast(p)}`);
+  await setEngineName(p, "Autosaved");
+  await p.waitForTimeout(2200);
+  const writes = (await calls(p)).filter((x) => x[0] === "writeFile");
+  check(writes.length >= 2, `autosave: ${JSON.stringify(writes)}`);
+  await template(p, "empty");
+  await p.click("#open");
+  await p.waitForTimeout(800);
+  check((await engineName(p)) === "Autosaved", `opened: ${await engineName(p)}`);
+  // Each branch runs in its own folder.
+  await p.click("#branch-btn");
+  await p.fill(".br-new input", "try");
+  await p.locator(".br-new button").click();
+  await p.keyboard.press("Escape");
+  await p.click("#run-btn");
+  await p.waitForSelector("#dock .out-engine:has-text('uciok')");
+  const write = (await calls(p)).find((x) => x[0] === "write")!;
+  check(String(write[1]).endsWith("-try"), `branch folder: ${write[1]}`);
 }, desktopMock);
 
 await test("the guide shows its pages and links between them", async (p) => {
