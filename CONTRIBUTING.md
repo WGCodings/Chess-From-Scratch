@@ -31,6 +31,8 @@ Go to [Issues](https://github.com/WGCodings/Chess-From-Scratch/issues) and click
 
 4. Open the pull request with a short description of what changed and why.
 
+How the code is organised and how the generator works: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+
 New built-in blocks need a region in `packages/codegen/templates/`, an entry in
 `packages/codegen/src/blocks.ts`, and must keep the reference engine's `bench`
 node count unless they are meant to change it.
