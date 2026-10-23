@@ -14,8 +14,7 @@ about ten minutes.
 
 ## Try it
 
-Open **[chessfromscratch.wgcodings.com](https://chessfromscratch.wgcodings.com)**
-(coming soon) and click **Tutorial**. Nothing to install: it all runs in your
+Open **[chessfromscratch.wgcodings.com](https://chessfromscratch.wgcodings.com)** and click **Tutorial**. Nothing to install: it all runs in your
 browser, and your work stays on your computer.
 
 To build and play your engine you need [Rust](https://rustup.rs). The tutorial
