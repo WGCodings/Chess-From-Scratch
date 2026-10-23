@@ -70,6 +70,12 @@ reference crate.
 
 ## The editor
 
+**Tutorial** (top bar, offered once on a first visit): a guided first engine.
+It empties the canvas, has you drag an Engine block and a Random mover, walks
+through the generated code (`search.rs`, `uci.rs`, `main.rs`), then Link folder
+for VS Code or Export, installing Rust, `cargo build --release`, typing UCI
+commands and playing the engine in a GUI. Each step checks that you did it.
+
 *New* offers three templates: **Empty** (just the Engine block), **Starter
 engine** (plain fixed-depth Negamax and a Hand-crafted evaluation without
 terms) and **Every block**. You build the engine one block at a time:
@@ -86,7 +92,10 @@ terms) and **Every block**. You build the engine one block at a time:
   unless you plug *Tapered evaluation* into its *blend by phase* input.
 
 Blocks only fit where they belong (typed connections), each block appears
-once, and loose blocks are greyed out and ignored. Blocks that need another
+once, and loose blocks are greyed out and ignored. The drawer stays open while
+you drag blocks out of it (or onto it to delete them); click the category again
+or press Esc to close it. *My blocks* has one folder per slot (plus *Skeleton
+versions*), and block files are saved the same way: `blocks/<slot>/<id>.block.rs`. Blocks that need another
 block first are greyed out in the drawer until it is in your engine, and a
 block that needs another block of the same slot only snaps in below it
 (Principal variation search under Alpha-beta pruning).
@@ -225,5 +234,5 @@ compiles is up to cargo.
 
 ## Status
 
-Sprint 5 (editable and custom blocks; templates and skeleton blocks). See the MVP plan doc in the
+Sprint 5 (editable and custom blocks) is done; Sprint 6 (export and launch) is next. See the MVP plan doc in the
 Claude project for scope and the sprint roadmap.

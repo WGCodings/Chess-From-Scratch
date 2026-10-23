@@ -6,6 +6,7 @@
  * the blocks, and changes made in the app are written out again.
  */
 
+import { blockIdOfPath } from "@cfs/codegen";
 import { viewOf, type GeneratedFile } from "@cfs/codegen";
 
 /** What the folder sync needs from the app. */
@@ -137,16 +138,15 @@ export class FolderSync {
         const text = await this.read(path);
         if (text === null || text === mine || this.rejected.get(path) === text) continue;
         if (text !== mine && this.rejected.has(path) && this.rejected.get(path) !== text) this.rejected.delete(path);
-        const block = /^blocks\/([a-z][a-z0-9_]*)\.block\.rs$/.exec(path);
-        if (block) blocks.push({ id: block[1]!, path, text });
+        const id = blockIdOfPath(path);
+        if (id) blocks.push({ id, path, text });
         else if (this.base.find((f) => f.path === path)?.origins) code.push({ path, text });
       }
       // Blocks also live in blocks/ files written outside the app.
-      for (const name of await this.listBlockFiles()) {
-        const path = `blocks/${name}`;
+      for (const path of await this.listBlockFiles()) {
         if (this.written.has(path)) continue;
         const text = await this.read(path);
-        const id = /^([a-z][a-z0-9_]*)\.block\.rs$/.exec(name)?.[1];
+        const id = blockIdOfPath(path);
         if (text !== null && id && this.rejected.get(path) !== text) blocks.push({ id, path, text });
       }
       if (!code.length && !blocks.length) return;
@@ -186,17 +186,24 @@ export class FolderSync {
     if (applied) await this.writeOut();
   }
 
+  /** Paths of the block files in `blocks/` and its slot folders. */
   private async listBlockFiles(): Promise<string[]> {
+    const entries = (d: DirHandle) => (d as unknown as { entries(): AsyncIterable<[string, FileSystemHandle]> }).entries();
+    const paths: string[] = [];
     try {
-      const d = await this.dir.getDirectoryHandle("blocks");
-      const names: string[] = [];
-      for await (const [name, h] of (d as unknown as { entries(): AsyncIterable<[string, FileSystemHandle]> }).entries()) {
-        if (h.kind === "file" && name.endsWith(".block.rs")) names.push(name);
+      const top = await this.dir.getDirectoryHandle("blocks");
+      for await (const [name, h] of entries(top)) {
+        if (h.kind === "file" && name.endsWith(".block.rs")) paths.push(`blocks/${name}`);
+        if (h.kind === "directory") {
+          for await (const [inner, h2] of entries(h as DirHandle)) {
+            if (h2.kind === "file" && inner.endsWith(".block.rs")) paths.push(`blocks/${name}/${inner}`);
+          }
+        }
       }
-      return names;
     } catch {
-      return [];
+      // No blocks folder yet.
     }
+    return paths;
   }
 
   /** Forget a rejected edit (after the user cancels it in the app). */

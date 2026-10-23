@@ -18,7 +18,7 @@ import {
 import { TEMPLATES } from "./embedded.generated";
 import { renderTemplateWithOwners } from "./template";
 import { applyToGenerated, customFiles, moduleOf, traceTemplate, type Origin } from "./custom";
-import { serializeBlock, type BlockFile } from "./blockfile";
+import { blockFilePath, serializeBlock, type BlockFile } from "./blockfile";
 import {
   KNOWN_REGIONS,
   asVersionParams,
@@ -311,7 +311,7 @@ instance, which uses the \`bench\` command above.
   free to change them too.
 - \`workspace.json\`: your blocks; open it in Chess From Scratch to keep editing.${
     Object.keys(ws.customBlocks ?? {}).length
-      ? "\n- \`blocks/\`: your own blocks as block files, to import into other projects."
+      ? "\n- \`blocks/\`: your own blocks as block files (one folder per slot), to import into other projects."
       : ""
   }
 `;
@@ -369,7 +369,7 @@ export function generateProject(ws: Workspace, options: GenerateOptions = {}): G
     { path: ".gitignore", contents: GITIGNORE },
     { path: ".cargo/config.toml", contents: CARGO_CONFIG },
     { path: "workspace.json", contents: `${JSON.stringify(ws, null, 2)}\n` },
-    ...custom.map(([id, src]) => ({ path: `blocks/${id}.block.rs`, contents: src.endsWith("\n") ? src : `${src}\n` })),
+    ...custom.map(([id, src]) => ({ path: blockFilePath(id, src), contents: src.endsWith("\n") ? src : `${src}\n` })),
     { path: "src/params.rs", contents: generated(generateParams(ws), "params.rs") },
     ...templateFiles(ws, enabled).map(render),
     ...extra.map((f) => ({

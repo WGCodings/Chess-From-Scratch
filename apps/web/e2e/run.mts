@@ -28,6 +28,10 @@ const pageErrors: string[] = [];
 
 async function newPage(): Promise<Page> {
   const ctx = await browser.newContext({ viewport: { width: 1600, height: 2000 }, acceptDownloads: true });
+  // The tutorial offer would cover part of the canvas; its own test clears this.
+  await ctx.addInitScript(() => {
+    if (!sessionStorage.getItem("cfs.e2e.offer")) localStorage.setItem("cfs.tutorial.seen", "1");
+  });
   const p = await ctx.newPage();
   p.on("pageerror", (e) => pageErrors.push(String(e)));
   p.on("dialog", (d) => void d.accept());
@@ -263,7 +267,7 @@ await test("editing skeleton code makes your own Negamax, with only the code in 
   check(await p.locator("#code-editor").isHidden(), `still editing: ${await p.locator("#code-errors").innerText()}`);
   check((await blockOnCanvas(p, "My negamax search").count()) === 1, "your Negamax is not on the canvas");
   check((await openFile(p, "src/search.rs")).includes("self.pv.clear(ply); // mine"), "edit not in the code");
-  const block = await openFile(p, "blocks/my_negamax.block.rs");
+  const block = await openFile(p, "blocks/skeleton/my_negamax.block.rs");
   check(block.includes("// @builtin") && !block.includes("killers.push"), "your Negamax holds code of blocks not in the engine");
 });
 
@@ -360,7 +364,7 @@ await test("a change inside a built-in block can be saved as a new block on top 
   check((await blockOnCanvas(p, "Deeper NMP").count()) === 1, `no new block: ${await toast(p)}`);
   check((await blockOnCanvas(p, "Null move pruning").count()) >= 1, "Null move pruning was replaced");
   check((await openFile(p, "src/search.rs")).includes("+ depth / 8;"), "edit not in code");
-  const block = await openFile(p, "blocks/deeper_nmp.block.rs");
+  const block = await openFile(p, "blocks/pruning/deeper_nmp.block.rs");
   check(block.includes("requires: null_move_pruning") && block.includes("// @replace search.rs"), `block file: ${block.slice(0, 400)}`);
 });
 
@@ -393,9 +397,9 @@ await test("New block on top of this one: your block's lines changed in a block 
   await p.click("#save-code");
   await p.waitForTimeout(900);
   check((await blockOnCanvas(p, "My PVS").count()) === 1, `no PVS block: ${await p.locator("#code-errors").innerText()} ${await toast(p)}`);
-  const block = await openFile(p, "blocks/my_pvs.block.rs");
+  const block = await openFile(p, "blocks/move_loop/my_pvs.block.rs");
   check(block.includes("requires: my_alpha_beta") && block.includes("// @replace search.rs"), `block file: ${block.slice(0, 500)}`);
-  check(!(await openFile(p, "blocks/my_alpha_beta.block.rs")).includes("let mut score;"), "your alpha-beta changed");
+  check(!(await openFile(p, "blocks/move_loop/my_alpha_beta.block.rs")).includes("let mut score;"), "your alpha-beta changed");
   check((await p.locator("#issues").innerText()).includes("Ready"), `not ready: ${await p.locator("#issues").innerText()}`);
 });
 
@@ -415,6 +419,8 @@ await test("Edit this block forks a built-in block in the block editor", async (
 await test("New block from My blocks is placed and generated", async (p) => {
   await template(p, "reference");
   await p.locator(".blocklyToolboxCategory", { hasText: "My blocks" }).click();
+  await p.waitForTimeout(300);
+  await p.locator(".blocklyToolboxCategory", { hasText: "New or import" }).click();
   await p.waitForTimeout(300);
   await p.locator(".blocklyFlyoutButton", { hasText: "New block" }).click();
   await p.fill(".be-small input", "Late reduction test");
@@ -486,7 +492,7 @@ await test("linked folder: files written, edits come back as blocks", async (p) 
   await write("src/search.rs", lines.join("\n"));
   await p.waitForTimeout(2500);
   check((await blockOnCanvas(p, "From vscode").count()) === 1, `block not created: ${await p.locator("#folder-status").innerText()} ${await p.locator("#code-errors").innerText()}`);
-  check((await read("blocks/from_vscode.block.rs")).includes("@hook extensions"), "block file not written back");
+  check((await read("blocks/extensions/from_vscode.block.rs")).includes("@hook extensions"), "block file not written back");
 
   // A broken edit is explained, not applied; fixing it applies.
   const now = await read("src/search.rs");
@@ -497,11 +503,11 @@ await test("linked folder: files written, edits come back as blocks", async (p) 
   // A change inside one of your blocks: the app asks whether to change it or build on it.
   await answerSave(p);
   await p.waitForTimeout(1500);
-  check((await read("blocks/from_vscode.block.rs")).includes("// one ply"), "fix not applied");
+  check((await read("blocks/extensions/from_vscode.block.rs")).includes("// one ply"), "fix not applied");
 
   // Editing the block file itself updates the block.
-  const blk = await read("blocks/from_vscode.block.rs");
-  await write("blocks/from_vscode.block.rs", blk.replace("//! label: From vscode", "//! label: Check ext from VS Code"));
+  const blk = await read("blocks/extensions/from_vscode.block.rs");
+  await write("blocks/extensions/from_vscode.block.rs", blk.replace("//! label: From vscode", "//! label: Check ext from VS Code"));
   await p.waitForTimeout(2500);
   check((await blockOnCanvas(p, "Check ext from VS Code").count()) === 1, "block file edit not applied");
 
@@ -526,6 +532,102 @@ await test("save and open a .cfs project with its blocks", async (p) => {
   await p.setInputFiles("#file", path);
   await p.waitForTimeout(900);
   check((await openFile(p, "src/search.rs")).includes("// @block my_null_move_pruning"), "blocks not restored");
+});
+
+await test("the drawer stays open after dragging a block out, and My blocks has a folder per slot", async (p) => {
+  await template(p, "starter");
+  await p.locator(".blocklyToolboxCategory", { hasText: "Move loop" }).first().click();
+  await p.waitForTimeout(300);
+  const visible = () =>
+    p.evaluate(() => (window as unknown as { __cfsWorkspace: import("blockly").WorkspaceSvg }).__cfsWorkspace.getFlyout()?.isVisible() ??
+      ((window as unknown as { __cfsWorkspace: import("blockly").WorkspaceSvg }).__cfsWorkspace.getToolbox() as import("blockly").Toolbox).getFlyout()!.isVisible());
+  check(await visible(), "drawer did not open");
+  // Drag Alpha-beta out of the drawer onto the canvas with the mouse.
+  const src = await p.locator(".blocklyFlyout .blocklyDraggable text", { hasText: "Alpha-beta pruning" }).first().boundingBox();
+  check(src, "Alpha-beta not in the drawer");
+  await p.mouse.move(src.x + 5, src.y + 5);
+  await p.mouse.down();
+  await p.mouse.move(src.x + 400, src.y + 200, { steps: 12 });
+  await p.mouse.up();
+  await p.waitForTimeout(500);
+  check((await blockOnCanvas(p, "Alpha-beta pruning").count()) >= 1, "block not dragged out");
+  check(await visible(), "the drawer closed after dragging a block out");
+  // My blocks: the examples sit in their slot folders.
+  await p.locator(".blocklyToolboxCategory", { hasText: "My blocks" }).first().click();
+  await p.waitForTimeout(300);
+  const names = await p.locator(".blocklyToolboxCategory").allInnerTexts();
+  for (const folder of ["Extensions", "Move ordering", "Evaluation"]) {
+    check(names.some((n) => n.startsWith(folder) && /\(\d+\)/.test(n)), `no ${folder} folder: ${names.join(" | ")}`);
+  }
+});
+
+await test("the tutorial builds a random mover from an empty canvas", async (p) => {
+  // A first visit gets the offer.
+  await p.evaluate(() => {
+    localStorage.removeItem("cfs.tutorial.seen");
+    sessionStorage.setItem("cfs.e2e.offer", "1");
+  });
+  await p.reload();
+  await p.waitForSelector(".tut-offer", { timeout: 4000 });
+  await p.locator('.tut [data-act="start"]').click();
+  await p.locator('.tut [data-act="action"]').click(); // empty the canvas (the confirm is accepted)
+  await p.waitForTimeout(500);
+  check((await p.locator(".tut-state.ok").count()) === 1, "empty canvas not detected");
+  await p.locator('.tut [data-act="next"]').click();
+  check((await p.locator("#cat_engine.tut-target, .tut-target").count()) >= 1, "nothing points at the Engine category");
+  // Step 1: the Engine block.
+  await p.evaluate(() => {
+    const bw = (window as unknown as { __cfsWorkspace: import("blockly").WorkspaceSvg }).__cfsWorkspace;
+    const b = bw.newBlock("cfs_engine");
+    b.initSvg();
+    b.render();
+    b.moveBy(80, 60);
+  });
+  await p.waitForTimeout(600);
+  check((await p.locator(".tut-state.ok").count()) === 1, "engine block not detected");
+  await p.locator('.tut [data-act="next"]').click();
+  // Step 2: a name.
+  await p.evaluate(() => {
+    const bw = (window as unknown as { __cfsWorkspace: import("blockly").WorkspaceSvg }).__cfsWorkspace;
+    bw.getBlocksByType("cfs_engine", false)[0]!.setFieldValue("Rando", "NAME");
+  });
+  await p.waitForTimeout(600);
+  check((await p.locator(".tut-body").innerText()).includes("rando"), "crate name not shown");
+  await p.locator('.tut [data-act="next"]').click();
+  // Step 3: Random mover in the search slot.
+  await p.evaluate(() => {
+    const bw = (window as unknown as { __cfsWorkspace: import("blockly").WorkspaceSvg }).__cfsWorkspace;
+    const engine = bw.getBlocksByType("cfs_engine", false)[0]!;
+    const r = bw.newBlock("cfs_random_mover");
+    r.initSvg();
+    r.render();
+    engine.getInput("SEARCH")!.connection!.connect(r.previousConnection!);
+  });
+  await p.waitForTimeout(800);
+  check((await p.locator(".tut-state.ok").count()) === 1, "random mover not detected");
+  check((await p.locator(".tour:not([hidden])").count()) === 0 || !(await p.locator(".tour").first().isVisible()), "a change tour opened during the tutorial");
+  await p.locator('.tut [data-act="next"]').click();
+  // Step 4: open src/search.rs.
+  await p.locator('.tree-file[data-path="src/search.rs"]').click();
+  await p.waitForTimeout(300);
+  check((await p.locator(".tut-state.ok").count()) === 1, "opening search.rs not detected");
+  await p.locator('.tut [data-act="next"]').click();
+  // Step 5: the code is highlighted.
+  await p.waitForTimeout(300);
+  const marked = await p.locator(".code .ln.tut-line").allInnerTexts();
+  check(marked.some((l) => l.includes("fn search(")), `highlighted: ${marked.slice(0, 2).join(" | ")}`);
+  for (let k = 0; k < 3; k++) await p.locator('.tut [data-act="next"]').click();
+  // Step 8: export.
+  check((await p.locator(".tut-title").innerText()).startsWith("8."), await p.locator(".tut-title").innerText());
+  const download = p.waitForEvent("download");
+  await p.click("#export");
+  await download;
+  await p.waitForTimeout(300);
+  check((await p.locator(".tut-state.ok").count()) === 1, "export not detected");
+  for (let k = 0; k < 5; k++) await p.locator('.tut [data-act="next"]').click();
+  check((await p.locator(".tut-title").innerText()).startsWith("Done"), await p.locator(".tut-title").innerText());
+  await p.locator('.tut [data-act="next"]').click();
+  check((await p.locator(".tut").count()) === 0, "tutorial still open");
 });
 
 console.log(`\n${passed} passed, ${failed} failed${pageErrors.length ? `; page errors: ${pageErrors.join(" | ")}` : ""}`);

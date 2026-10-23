@@ -15,6 +15,7 @@ import { evalSpec, searchSpec, skeletonSpec, type ParamSpec } from "./blocks";
 import {
   HOOKS,
   TEMPLATES,
+  blockFilePath,
   dedent,
   escapeBody,
   findRegions,
@@ -667,7 +668,7 @@ export function codeToBlocks(
   // Everything produced must be a valid block file.
   for (const [id, text] of Object.entries(result.sources)) {
     const error = parseBlock(text).diagnostics.find((d) => d.level === "error");
-    if (error) result.errors.push({ path: `blocks/${id}.block.rs`, line: error.line, message: `${id}: ${error.message}` });
+    if (error) result.errors.push({ path: blockFilePath(id, text), line: error.line, message: `${id}: ${error.message}` });
   }
   return result;
 }

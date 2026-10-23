@@ -358,7 +358,22 @@ const blocksIn = (slot: SearchSlot) =>
 export interface ToolboxCustom {
   id: string;
   group: "project" | "library" | "example";
+  /** Its folder: the slot, or "skeleton" for your versions of skeleton blocks. */
+  folder: string;
 }
+
+/** The sub-categories of My blocks, in drawer order. */
+const MY_FOLDERS: [string, string, string][] = [
+  ["root", "At the root", COLOURS.root],
+  ["pruning", "Pruning", COLOURS.pruning],
+  ["ordering", "Move ordering", COLOURS.ordering],
+  ["extensions", "Extensions", COLOURS.extensions],
+  ["move_loop", "Move loop", COLOURS.move_loop],
+  ["reductions", "Reductions", COLOURS.reductions],
+  ["leaf", "Leaf", COLOURS.leaf],
+  ["eval", "Evaluation", COLOURS.evalTerm],
+  ["skeleton", "Skeleton versions", COLOURS.skeleton],
+];
 
 export const NEW_BLOCK_BUTTON = "cfsNewBlock";
 export const IMPORT_BLOCK_BUTTON = "cfsImportBlock";
@@ -383,11 +398,12 @@ export function toolbox(custom: ToolboxCustom[] = [], disabled: ReadonlySet<stri
 }
 
 function catalogue(custom: ToolboxCustom[]): Blockly.utils.toolbox.ToolboxDefinition {
-  const category = (name: string, colour: string, contents: object[]) => ({
+  const category = (name: string, colour: string, contents: object[], id = `cat_${name.toLowerCase().replace(/\W+/g, "_")}`) => ({
     kind: "category",
     name,
     colour,
     contents,
+    toolboxitemid: id,
   });
   return {
     kind: "categoryToolbox",
@@ -412,13 +428,40 @@ function catalogue(custom: ToolboxCustom[]): Blockly.utils.toolbox.ToolboxDefini
         { kind: "block", type: TAPER },
         ...(Object.keys(EVAL_TERMS) as EvalTermType[]).map((t) => ({ kind: "block", type: evalType(t) })),
       ]),
-      category("My blocks", "#5c5c5c", [
-        { kind: "button", text: "New block…", callbackKey: NEW_BLOCK_BUTTON },
-        { kind: "button", text: "Import block file…", callbackKey: IMPORT_BLOCK_BUTTON },
-        ...customGroup(custom, "project", "In this project"),
-        ...customGroup(custom, "library", "Saved in your browser"),
-        ...customGroup(custom, "example", "Examples"),
-      ]),
+      // My blocks: one folder per slot, each split into this project, your library and examples.
+      category(
+        "My blocks",
+        "#5c5c5c",
+        [
+          category(
+            "New or import",
+            "#5c5c5c",
+            [
+              { kind: "button", text: "New block…", callbackKey: NEW_BLOCK_BUTTON },
+              { kind: "button", text: "Import block file…", callbackKey: IMPORT_BLOCK_BUTTON },
+              { kind: "label", text: "Your blocks are in the folders below, one per slot." },
+            ],
+            "my_new",
+          ),
+          ...MY_FOLDERS.flatMap(([folder, name, colour]) => {
+            const items = custom.filter((c) => c.folder === folder);
+            if (!items.length) return [];
+            return [
+              category(
+                `${name} (${items.length})`,
+                colour,
+                [
+                  ...customGroup(items, "project", "In this project"),
+                  ...customGroup(items, "library", "Saved in your browser"),
+                  ...customGroup(items, "example", "Examples"),
+                ],
+                `my_${folder}`,
+              ),
+            ];
+          }),
+        ],
+        "my_blocks",
+      ),
     ],
   } as Blockly.utils.toolbox.ToolboxDefinition;
 }

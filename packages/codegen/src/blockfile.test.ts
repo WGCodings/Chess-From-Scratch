@@ -202,7 +202,7 @@ describe("custom blocks in a workspace", () => {
     expect(files.find((f) => f.path === "src/tempo.rs")).toBeDefined();
     expect(files.find((f) => f.path === "src/main.rs")!.contents).toContain("mod tempo;");
     expect(files.find((f) => f.path === "src/params.rs")!.contents).toContain("pub const TEMPO: S = S(15, 5);");
-    expect(files.find((f) => f.path === "blocks/tempo.block.rs")!.contents).toBe(EXAMPLE_BLOCKS.tempo);
+    expect(files.find((f) => f.path === "blocks/eval/tempo.block.rs")!.contents).toBe(EXAMPLE_BLOCKS.tempo);
   });
 
   it("generates skeleton values a block mentions", () => {

@@ -701,6 +701,24 @@ export function serializeBlock(b: BlockFile, intro?: string): string {
   return [...head, "", ...(intro ? [intro, ""] : []), body.join("\n\n"), ""].join("\n");
 }
 
+/** The folder of `blocks/` a block file goes in: its slot, `eval`, or `skeleton` for versions of skeleton blocks. */
+export function blockFolder(slot: BlockSlot | string | undefined): string {
+  if (!slot) return "other";
+  if ((CUSTOM_SLOTS as readonly string[]).includes(slot)) return slot;
+  return "skeleton";
+}
+
+/** Where a block file lives in a project: `blocks/<slot>/<id>.block.rs`. */
+export function blockFilePath(id: string, source: string): string {
+  const slot = /^\/\/!\s*slot:\s*(\w+)/m.exec(source)?.[1];
+  return `blocks/${blockFolder(slot)}/${id}.block.rs`;
+}
+
+/** The block id of a path under `blocks/` (in a slot folder or directly in it), or null. */
+export function blockIdOfPath(path: string): string | null {
+  return /^blocks\/(?:[a-z_]+\/)?([a-z][a-z0-9_]*)\.block\.rs$/.exec(path)?.[1] ?? null;
+}
+
 /** A free id based on `wanted`. */
 export function freeId(wanted: string, taken: Iterable<string>): string {
   const used = new Set(taken);

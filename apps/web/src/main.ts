@@ -13,6 +13,9 @@ import {
   emptyWorkspace,
   enabledRegions,
   evalSpec,
+  blockFilePath,
+  blockFolder,
+  blockIdOfPath,
   forkBlock,
   freeId,
   isCustomSlot,
@@ -68,6 +71,7 @@ import { describeCode, diffLines, explain, lineRegions, splitSections, type Hunk
 import { renderCode } from "./highlight";
 import { infoForBlockType, infoForKey, placedKeys, setCustomLookup, type BlockInfo } from "./info";
 import { misplaced, missingFor, presentIn, requirementLabel, setRuleSources } from "./rules";
+import { Tutorial } from "./tutorial";
 import "./style.css";
 
 const STORAGE_KEY = "cfs.blockly.v2";
@@ -224,6 +228,21 @@ function searchEntries(): SearchEntry[] {
 }
 installToolboxSearch(bw, searchEntries);
 
+// The drawer stays open while you drag blocks out of it (or into it to delete them);
+// click the category again (or press Escape) to close it.
+const drawer = () => (bw.getToolbox() as Blockly.Toolbox | null)?.getFlyout() ?? null;
+const keepDrawerOpen = () => {
+  const f = drawer();
+  if (f) f.autoClose = false;
+};
+keepDrawerOpen();
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !drawer()?.isVisible()) return;
+  const t = e.target as HTMLElement | null;
+  if (t?.closest("input, textarea, .cm-editor, .be, .tour")) return;
+  (bw.getToolbox() as Blockly.Toolbox).clearSelection();
+});
+
 bw.registerButtonCallback(NEW_BLOCK_BUTTON, () => openNewBlockDialog(createNewBlock));
 bw.registerButtonCallback(IMPORT_BLOCK_BUTTON, () => fileInput.click());
 
@@ -365,6 +384,9 @@ function lineClasses(path: string): string[] {
   if (focusRegion) {
     lineRegions(src).forEach((r, i) => r === focusRegion && add(i, "focus"));
   }
+  if (tutorialMark?.path === path) {
+    for (let i = tutorialMark.start; i < tutorialMark.start + tutorialMark.count; i++) add(i, "tut-line");
+  }
   if (tour) {
     tour.hunks.forEach((h, k) => {
       if (h.file !== path) return;
@@ -375,6 +397,11 @@ function lineClasses(path: string): string[] {
   }
   return extra;
 }
+
+/** Lines the tutorial points at. */
+let tutorialMark: { path: string; start: number; count: number } | null = null;
+let tutorial: Tutorial | null = null;
+let exportedOnce = false;
 
 function showFile(path: string, scrollTo?: number): void {
   if (!files.some((f) => f.path === path)) path = "src/search.rs";
@@ -407,6 +434,7 @@ function showFile(path: string, scrollTo?: number): void {
     while (first?.previousElementSibling?.classList.contains("removed")) first = first.previousElementSibling as HTMLElement;
     (first ?? target)?.scrollIntoView({ block: "center", behavior: "smooth" });
   }
+  tutorial?.update();
 }
 
 /** Highlights the code of the selected block, jumping to it if needed. */
@@ -686,6 +714,7 @@ function refresh(): void {
     }
   }
   updateCustomBlocks();
+  tutorial?.update();
   const issues: Issue[] = problems.map((message) => ({ level: "error", message }));
   if (workspace) issues.push(...validate(workspace));
   const blocking = issues.some((i) => i.level === "error");
@@ -726,7 +755,8 @@ function refresh(): void {
     const removed = [...lastKeys].filter((k) => !keys.has(k)).map(infoForKey).filter((i): i is BlockInfo => !!i);
     lastKeys = keys;
 
-    if (!suppressTour && added.length > 0) {
+    // The tutorial explains the code itself; no change tours on top of it.
+    if (!suppressTour && added.length > 0 && !tutorial?.running) {
       const hunks = changeHunks(before);
       const title = added.length === 1 ? `${added[0]!.label} added` : `${added.length} blocks added`;
       startTour({ title, blocks: added, hunks: sortHunks(hunks), mode: "added" });
@@ -787,7 +817,7 @@ function updateCustomBlocks(): void {
     if (!block?.id || block.id !== id) return;
     const type = defineCustomBlock(block);
     (bw.options.maxInstances ??= {})[type] = 1;
-    entries.push({ id, group });
+    entries.push({ id, group, folder: blockFolder(block.slot) });
   };
   for (const id of Object.keys(project)) add(id, "project");
   for (const id of Object.keys(library)) if (!(id in project)) add(id, "library");
@@ -805,6 +835,15 @@ function updateCustomBlocks(): void {
   if (signature !== toolboxSignature) {
     toolboxSignature = signature;
     bw.updateToolbox(toolbox(entries, disabled));
+    // An open drawer shows the new state (blocks that became available) right away.
+    const tb = bw.getToolbox() as Blockly.Toolbox | null;
+    const open = tb?.getSelectedItem() as Blockly.ISelectableToolboxItem | null | undefined;
+    if (tb?.getFlyout()?.isVisible() && open) {
+      // The selected item may be the one from before the update: show the new one's contents.
+      const fresh = tb.getToolboxItemById(open.getId()) as Blockly.ISelectableToolboxItem | null;
+      tb.getFlyout()!.show((fresh ?? open).getContents() as Blockly.utils.toolbox.FlyoutItemInfoArray);
+    }
+    keepDrawerOpen();
   }
 }
 
@@ -1108,7 +1147,8 @@ async function newBlockOnTop(block: Blockly.Block): Promise<void> {
 function editLine(path: string, i: number): void {
   const text = lines(path)[i] ?? "";
   if (path.startsWith("blocks/")) {
-    return editCustom(path.slice("blocks/".length).replace(/\.block\.rs$/, ""), i + 1);
+    const id = blockIdOfPath(path);
+    return id ? editCustom(id, i + 1) : undefined;
   }
   const owners = ownersOf(path)[i] ?? [];
   const inner = owners.filter((o) => !o.startsWith("!")).at(-1);
@@ -1420,6 +1460,7 @@ async function linkFolder(handle: FileSystemDirectoryHandle): Promise<void> {
   await folder.writeOut();
   folder.start();
   await rememberFolder(handle);
+  tutorial?.update();
   linkBtn.textContent = "Unlink folder";
   linkBtn.title = `Stop syncing with ${handle.name}`;
   toast(`Linked to ${handle.name}: open that folder in VS Code. Saved edits come back here as blocks.`);
@@ -1568,8 +1609,8 @@ function readBundle(data: Uint8Array): Workspace {
   const ws = parseWorkspaceFile(strFromU8(json));
   // Block files in blocks/ win: they may have been edited outside the app.
   for (const [p, d] of files) {
-    const m = /^blocks\/([a-z][a-z0-9_]*)\.block\.rs$/.exec(p);
-    if (m) ws.customBlocks![m[1]!] = strFromU8(d);
+    const id = blockIdOfPath(p);
+    if (id) ws.customBlocks![id] = strFromU8(d);
   }
   return ws;
 }
@@ -1610,13 +1651,15 @@ $("save").addEventListener("click", () => {
   const entries: Record<string, Uint8Array> = {
     "workspace.json": strToU8(`${JSON.stringify(workspace, null, 2)}\n`),
   };
-  for (const [id, src] of Object.entries(workspace.customBlocks ?? {})) entries[`blocks/${id}.block.rs`] = strToU8(src);
+  for (const [id, src] of Object.entries(workspace.customBlocks ?? {})) entries[blockFilePath(id, src)] = strToU8(src);
   download(`${name}.cfs`, zipSync(entries, { level: 6 }), "application/zip");
   toast(`Saved ${name}.cfs`);
 });
 
 exportBtn.addEventListener("click", () => {
   if (!current) return;
+  exportedOnce = true;
+  tutorial?.update();
   const project = toCrateName(current.engine.name);
   const entries: Record<string, Uint8Array> = {};
   for (const f of generateProject(current)) entries[`${project}/${f.path}`] = strToU8(f.contents);
@@ -1637,6 +1680,55 @@ $("copy").addEventListener("click", async () => {
 
 // Start ---------------------------------------------------------------------
 
+// The tutorial: a first engine from an empty canvas to playing it in a GUI.
+tutorial = new Tutorial({
+  workspace: () => current,
+  hasEngine: () => bw.getAllBlocks(false).some((b) => skeletonKind(b.type) === "engine"),
+  engineName: () => {
+    const engine = bw.getAllBlocks(false).find((b) => skeletonKind(b.type) === "engine");
+    return engine ? String(engine.getFieldValue("NAME")) : "My Engine";
+  },
+  crateName: () => {
+    const engine = bw.getAllBlocks(false).find((b) => skeletonKind(b.type) === "engine");
+    return toCrateName(engine ? String(engine.getFieldValue("NAME")) : "My Engine");
+  },
+  activeFile: () => activeFile,
+  folderLinked: () => folder !== null,
+  canLinkFolders: () => canLinkFolders(),
+  exported: () => exportedOnce,
+  clearCanvas: () => {
+    if (bw.getAllBlocks(false).length && !window.confirm("Empty the canvas for the tutorial? Save your work first if you want to keep it.")) return false;
+    if (tour) endTour();
+    if (editing) stopEditing();
+    Blockly.Events.disable();
+    try {
+      bw.clear();
+    } finally {
+      Blockly.Events.enable();
+    }
+    setProject({});
+    // Nothing to show until there is an engine again, and nothing was "removed".
+    files = [];
+    lastKeys = new Set();
+    refresh();
+    save();
+    return true;
+  },
+  showLines: (path, from, count) => {
+    const src = lines(path);
+    const start = src.findIndex((l) => l.includes(from));
+    if (start < 0) return;
+    tutorialMark = { path, start, count };
+    showFile(path, start + Math.floor(count / 2));
+  },
+  clearLines: () => {
+    if (!tutorialMark) return;
+    tutorialMark = null;
+    showFile(activeFile);
+  },
+});
+$("tutorial-btn").addEventListener("click", () => (tutorial!.running ? tutorial!.stop() : tutorial!.start()));
+
 updateCustomBlocks();
 if (restore()) {
   showEngineTop();
@@ -1645,3 +1737,4 @@ if (restore()) {
 } else {
   load(starterWorkspace());
 }
+tutorial.resumeOrOffer();

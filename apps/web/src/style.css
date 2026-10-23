@@ -953,3 +953,146 @@ select:focus-visible {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* Tutorial ------------------------------------------------------------------ */
+
+.tut {
+  position: fixed;
+  left: 268px;
+  bottom: 18px;
+  z-index: 60;
+  width: min(400px, calc(100vw - 32px));
+  max-height: calc(100vh - 120px);
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px 12px;
+  background: var(--panel, #fff);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.22);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.tut-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tut-x {
+  border: 0;
+  background: none;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.tut-title {
+  font-size: 15px;
+}
+
+.tut-body p,
+.tut-body ul {
+  margin: 0 0 6px;
+}
+
+.tut-body ul {
+  padding-left: 18px;
+}
+
+.tut-body code {
+  font-size: 12px;
+  background: var(--panel-2);
+  padding: 0 3px;
+  border-radius: 3px;
+}
+
+.tut-cmd {
+  position: relative;
+  margin: 6px 0;
+  padding: 8px 10px;
+  background: #1f2329;
+  color: #e6e6e6;
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.tut-cmd code {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+.tut-copy {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  font-size: 11px;
+  border: 1px solid #555;
+  background: #2d333b;
+  color: #ddd;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.tut-state {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.tut-state.ok {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.tut-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.tut-spacer {
+  flex: 1;
+}
+
+.btn.link {
+  background: none;
+  border-color: transparent;
+  text-decoration: underline;
+}
+
+.tut-target {
+  outline: 3px solid var(--accent) !important;
+  outline-offset: 2px;
+  border-radius: 6px;
+  animation: tut-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes tut-pulse {
+  50% {
+    outline-color: transparent;
+  }
+}
+
+.code .ln.tut-line {
+  background: rgba(47, 111, 79, 0.28);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+@media (max-width: 900px) {
+  .tut {
+    left: 16px;
+  }
+}
