@@ -43,6 +43,20 @@ Windows warns about any new program it hasn't seen. Click *More info > Run anywa
 **A build error mentions my block.**
 The error shows a file and line. Find the `// @block your_block` markers around it, then fix the code in your block (double-click the line in the app to open it).
 
+## The desktop app
+
+**Run says Rust is not installed.**
+Install it from [rustup.rs](https://rustup.rs), then close and open Chess From Scratch again.
+
+**Run says it can't run yet.**
+Your engine isn't complete: the message says what is missing, just like Status.
+
+**The first Run takes long.**
+The first build downloads and builds the chess library. Later builds take seconds.
+
+**The engine doesn't answer.**
+Look at the panel: if it says *Stopped*, the engine has quit or crashed. The last lines above say why. Click **▶ Run** to start it again.
+
 ## Playing
 
 **The engine makes random moves.**

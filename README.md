@@ -14,11 +14,20 @@ about ten minutes.
 
 ## Try it
 
-Open **[chessfromscratch.wgcodings.com](https://chessfromscratch.wgcodings.com)** and click **Tutorial**. Nothing to install: it all runs in your
+Open **[chessfromscratch.wgcodings.com](https://chessfromscratch.wgcodings.com)**
+and click **Tutorial**. Nothing to install: it all runs in your
 browser, and your work stays on your computer.
 
 To build and play your engine you need [Rust](https://rustup.rs). The tutorial
 shows you how.
+
+## The desktop app
+
+The website is the demo. The **desktop app** (Windows, macOS, Linux) is the
+full program: the same editor, plus one-click **Run** to build your engine and
+talk to it, a terminal, and soon testing engines against each other. It works
+offline. Download it from the
+[Releases page](https://github.com/WGCodings/Chess-From-Scratch/releases/latest).
 
 ## What you can do
 

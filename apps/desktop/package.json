@@ -1,0 +1,16 @@
+{
+  "name": "@cfs/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "description": "Chess From Scratch as a desktop app (Tauri): the same editor as the website, plus building, running and testing engines on your computer.",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "icons": "tauri icon src-tauri/app-icon.png -o src-tauri/icons",
+    "selftest": "tauri build --debug --no-bundle && node tests/run-selftest.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4"
+  }
+}

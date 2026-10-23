@@ -72,6 +72,9 @@ import { renderCode } from "./highlight";
 import { infoForBlockType, infoForKey, placedKeys, setCustomLookup, type BlockInfo } from "./info";
 import { misplaced, missingFor, presentIn, requirementLabel, setRuleSources } from "./rules";
 import { Tutorial } from "./tutorial";
+import { Dock } from "./dock";
+import { installDesktopLinks } from "./links";
+import { isDesktop } from "./platform";
 import "./style.css";
 
 const STORAGE_KEY = "cfs.blockly.v2";
@@ -244,7 +247,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 bw.registerButtonCallback(NEW_BLOCK_BUTTON, () => openNewBlockDialog(createNewBlock));
-bw.registerButtonCallback(IMPORT_BLOCK_BUTTON, () => fileInput.click());
+bw.registerButtonCallback(IMPORT_BLOCK_BUTTON, () => blockInput.click());
 
 // Blocks not connected to an Engine block are greyed out and ignored.
 bw.addChangeListener(Blockly.Events.disableOrphans);
@@ -259,6 +262,7 @@ const tourEl = $("tour");
 const issuesEl = $<HTMLUListElement>("issues");
 const exportBtn = $<HTMLButtonElement>("export");
 const fileInput = $<HTMLInputElement>("file");
+const blockInput = $<HTMLInputElement>("block-file");
 const toastEl = $("toast");
 
 let files: GeneratedFile[] = [];
@@ -1200,7 +1204,12 @@ function editLine(path: string, i: number): void {
 }
 
 /** Adds a block file to My blocks (Open or Import). */
+/** Only block files can be imported as blocks: `<id>.block.rs`. */
+const NOT_A_BLOCK_FILE = (name: string) =>
+  `${name} is not a block file. Block files end in .block.rs (export one with right-click > Export block file).`;
+
 function importBlockFile(name: string, text: string): void {
+  if (!name.toLowerCase().endsWith(".block.rs")) return toast(NOT_A_BLOCK_FILE(name));
   const { block, diagnostics } = parseBlock(text);
   const error = diagnostics.find((d) => d.level === "error");
   if (!block || error) return toast(`${name}: ${error ? `line ${error.line}: ${error.message}` : "not a block file."}`);
@@ -1648,12 +1657,18 @@ function openWorkspace(ws: Workspace, name: string): void {
   toast(`Opened ${name}${added ? `; ${added} block${added > 1 ? "s" : ""} added to My blocks` : ""}`);
 }
 
+blockInput.addEventListener("change", async () => {
+  const file = blockInput.files?.[0];
+  blockInput.value = "";
+  if (file) importBlockFile(file.name, await file.text());
+});
+
 fileInput.addEventListener("change", async () => {
   const file = fileInput.files?.[0];
   fileInput.value = "";
   if (!file) return;
   try {
-    if (file.name.endsWith(".rs")) importBlockFile(file.name, await file.text());
+    if (file.name.toLowerCase().endsWith(".rs")) importBlockFile(file.name, await file.text());
     else if (/\.(cfs|zip)$/i.test(file.name)) openWorkspace(readBundle(new Uint8Array(await file.arrayBuffer())), file.name);
     else openWorkspace(parseWorkspaceFile(await file.text()), file.name);
   } catch (err) {
@@ -1715,6 +1730,42 @@ bw.addChangeListener((e: Blockly.Events.Abstract) => {
   if (!e.isUiEvent) updateEmptyHint();
 });
 
+// Run and terminal ------------------------------------------------------------
+
+const dock = new Dock($("dock"), {
+  project: () => {
+    if (!current) return { problem: "add an Engine block first." };
+    if (codeBlocked) return { problem: codeBlocked };
+    return { name: toCrateName(current.engine.name), files: files.map((f) => ({ path: f.path, contents: f.contents })) };
+  },
+  layoutChanged: () => Blockly.svgResize(bw),
+  stateChanged: () => tutorial?.update(),
+  toast,
+});
+$("run-btn").addEventListener("click", () => void dock.run());
+$("terminal-btn").addEventListener("click", () => dock.toggle("terminal"));
+Blockly.ContextMenuRegistry.registry.register({
+  id: "cfsRun",
+  scopeType: Blockly.ContextMenuRegistry.ScopeType.BLOCK,
+  displayText: () => (isDesktop ? "Run this engine" : "Run this engine (desktop app)"),
+  weight: -20,
+  preconditionFn: (scope) => (scope.block && !scope.block.isInFlyout && skeletonKind(scope.block.type) === "engine" ? "enabled" : "hidden"),
+  callback: () => void dock.run(),
+});
+// Ctrl+Enter runs, Ctrl+` opens the terminal (like VS Code).
+document.addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey) || document.querySelector(".be-backdrop")) return;
+  if (e.key === "Enter" && !editing) {
+    e.preventDefault();
+    void dock.run();
+  } else if (e.key === "`") {
+    e.preventDefault();
+    dock.toggle("terminal");
+  }
+});
+installDesktopLinks();
+document.body.classList.toggle("desktop", isDesktop);
+
 // Start ---------------------------------------------------------------------
 
 // The tutorial: a first engine from an empty canvas to playing it in a GUI.
@@ -1758,6 +1809,9 @@ tutorial = new Tutorial({
     tutorialMark = { path, start, count };
     showFile(path, start + Math.floor(count / 2));
   },
+  runEngine: () => void dock.run(),
+  engineRunning: () => dock.isRunning,
+  engineAnswered: () => dock.hasAnswered,
   clearLines: () => {
     if (!tutorialMark) return;
     tutorialMark = null;

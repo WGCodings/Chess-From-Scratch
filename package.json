@@ -8,8 +8,10 @@
   ],
   "scripts": {
     "dev": "npm run dev -w @cfs/web",
-    "build": "npm run build --workspaces",
-    "typecheck": "npm run typecheck --workspaces",
-    "test": "npm run test --workspaces --if-present"
+    "build": "npm run build -w @cfs/codegen && npm run build -w @cfs/web",
+    "typecheck": "npm run typecheck -w @cfs/codegen && npm run typecheck -w @cfs/web",
+    "test": "npm run test -w @cfs/codegen && npm run test -w @cfs/web",
+    "desktop": "npm run dev -w @cfs/desktop",
+    "desktop:build": "npm run build -w @cfs/desktop"
   }
 }

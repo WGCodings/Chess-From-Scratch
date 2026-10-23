@@ -6,3 +6,5 @@ crates/*/target
 .git
 apps/web/public/blockly-media
 packages/codegen/src/embedded.generated.ts
+apps/desktop/src-tauri/target
+apps/desktop/src-tauri/gen

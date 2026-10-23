@@ -1263,3 +1263,215 @@ body.guide-page {
     position: static;
   }
 }
+
+/* Run and terminal dock -------------------------------------------------- */
+
+.btn.run {
+  background: #1f2420;
+  border-color: #1f2420;
+  color: #e4e6df;
+}
+
+.btn.run:hover {
+  border-color: var(--accent);
+}
+
+.dock {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 140px;
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border-top: 1px solid #2c322d;
+}
+
+.dock-grip {
+  position: absolute;
+  top: -4px;
+  left: 0;
+  right: 0;
+  height: 8px;
+  cursor: ns-resize;
+  z-index: 5;
+}
+
+.dock-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid #2c322d;
+  font-size: 12px;
+}
+
+.dock-tab,
+.dock-btn,
+.dock-chip {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--code-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+
+.dock-tab.active {
+  color: var(--code-ink);
+  background: #2c322d;
+}
+
+.dock-btn {
+  border-color: #3a4139;
+}
+
+.dock-btn:hover:not(:disabled),
+.dock-chip:hover:not(:disabled),
+.dock-tab:hover {
+  color: var(--code-ink);
+  border-color: #56604f;
+}
+
+.dock-btn:disabled,
+.dock-chip:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.dock-btn.run {
+  color: #0f1a12;
+  background: var(--focus-bar);
+  border-color: var(--focus-bar);
+}
+
+.dock-btn.close {
+  border-color: transparent;
+}
+
+.dock-status {
+  margin-left: auto;
+  margin-right: 6px;
+  color: var(--code-dim);
+}
+
+.dock[data-state="running"] .dock-status {
+  color: var(--focus-bar);
+}
+
+.dock[data-state="busy"] .dock-status {
+  color: #e2c27a;
+}
+
+.dock-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dock-output {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 6px 12px;
+  overflow: auto;
+  font: 12.5px/1.45 ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.out-build {
+  color: var(--code-dim);
+}
+
+.out-sent {
+  color: var(--focus-bar);
+}
+
+.out-note {
+  color: #9fb4d8;
+}
+
+.out-error {
+  color: #f19a92;
+}
+
+.dock-quick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-top: 1px solid #2c322d;
+}
+
+.dock-chip {
+  border-color: #3a4139;
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  font-weight: 500;
+}
+
+.dock-num,
+.dock-fen,
+.dock-input {
+  font: 12px ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  color: var(--code-ink);
+  background: #161a17;
+  border: 1px solid #3a4139;
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+
+.dock-num {
+  width: 64px;
+}
+
+.dock-fen {
+  flex: 1;
+  min-width: 200px;
+}
+
+.dock-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 6px;
+  border-top: 1px solid #2c322d;
+}
+
+.dock-prompt {
+  color: var(--focus-bar);
+  font-family: ui-monospace, monospace;
+}
+
+.dock-input {
+  flex: 1;
+}
+
+.dock-num:focus,
+.dock-fen:focus,
+.dock-input:focus {
+  outline: 1px solid var(--focus-bar);
+}
+
+.dock-terminal {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 0 0 8px;
+}
+
+.dock-notice {
+  margin: auto;
+  max-width: 560px;
+  padding: 16px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.dock-notice p {
+  color: var(--code-dim);
+}

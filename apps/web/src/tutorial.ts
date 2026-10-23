@@ -5,6 +5,7 @@
  */
 
 import type { Workspace } from "@cfs/codegen";
+import { isDesktop } from "./platform";
 
 export interface TutorialHost {
   workspace(): Workspace | null;
@@ -23,6 +24,12 @@ export interface TutorialHost {
   showLines(path: string, from: string, count: number): void;
   /** Removes the code highlight. */
   clearLines(): void;
+  /** Desktop app: builds and starts the engine (▶ Run). */
+  runEngine(): void;
+  /** Desktop app: the engine is running. */
+  engineRunning(): boolean;
+  /** Desktop app: the engine has answered a `go` with a bestmove. */
+  engineAnswered(): boolean;
 }
 
 interface Step {
@@ -41,6 +48,99 @@ interface Step {
 
 const code = (lines: string) => `<pre class="tut-cmd"><button type="button" class="tut-copy" title="Copy">Copy</button><code>${lines}</code></pre>`;
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** On the website: export the project and build it in a terminal. */
+const WEB_RUN: Step[] = [
+  {
+    title: "8. Get the project onto your computer",
+    target: "#link-folder:not([hidden]), #export",
+    body: (h) =>
+      `${
+        h.canLinkFolders()
+          ? `<p><b>With VS Code (recommended):</b> click <b>Link folder</b> at the top and pick an empty folder. The app writes the project there and keeps it in sync: open that folder in VS Code (<i>File &gt; Open Folder</i>), and changes you save there come back here as blocks.</p><p><b>Or:</b> click <b>Export Rust project</b> to download a zip, and unzip it.</p>`
+          : `<p>Click <b>Export Rust project</b> to download a zip, and unzip it. (In Chrome or Edge you could also <b>Link folder</b> to keep a folder in sync for VS Code.)</p>`
+      }`,
+    done: (h) => h.folderLinked() || h.exported(),
+  },
+  {
+    title: "9. Install Rust (once)",
+    body: () =>
+      `<p>To build the engine you need Rust. If <code>cargo --version</code> already works in a terminal, skip this step.</p>
+       <p>Otherwise install it from <a href="https://rustup.rs" target="_blank" rel="noopener">rustup.rs</a> (on Windows, run <code>rustup-init.exe</code> and accept the defaults), then open a <b>new</b> terminal and check:</p>
+       ${code("cargo --version")}`,
+  },
+  {
+    title: "10. Build it",
+    body: (h) =>
+      `<p>Open a terminal in the project folder (in VS Code: <i>Terminal &gt; New Terminal</i>) and build the fast version:</p>
+       ${code("cargo build --release")}
+       <p>The first build downloads cozy-chess and takes a minute. Your engine is then <code>target/release/${esc(h.crateName())}</code> (on Windows <code>target\\release\\${esc(h.crateName())}.exe</code>).</p>`,
+  },
+  {
+    title: "11. Talk to it",
+    body: (h) =>
+      `<p>Start your engine and type the UCI commands a chess program would send, one per line:</p>
+       ${code(`cargo run --release
+uci
+position startpos
+go
+quit`)}
+       <p>It answers <code>id name ${esc(h.engineName())}</code> and <code>uciok</code> to <code>uci</code>, and a random <code>bestmove</code> such as <code>bestmove g1f3</code> to <code>go</code>. You can also start the program directly: <code>./target/release/${esc(h.crateName())}</code>.</p>`,
+  },
+  {
+    title: "12. Play against it",
+    body: (h) =>
+      `<p>Add the engine to a chess program and play it:</p>
+       <ul><li><a href="https://encroissant.org" target="_blank" rel="noopener">En Croissant</a>: <i>Engines &gt; Add new &gt; Local</i>, pick the file from step 10;</li>
+       <li><a href="https://cutechess.com" target="_blank" rel="noopener">Cute Chess</a>: <i>Tools &gt; Settings &gt; Engines &gt; +</i>, then <i>Game &gt; New</i>;</li>
+       <li>Arena: <i>Engines &gt; Install New Engine</i>.</li></ul>
+       <p>The file is <code>${esc(h.crateName())}</code> in <code>target/release</code>. It should be easy to beat!</p>`,
+  },
+];
+
+/** In the desktop app: Run builds and starts it. */
+const DESKTOP_RUN: Step[] = [
+  {
+    title: "8. Install Rust (once)",
+    body: () =>
+      `<p>The app builds your engine with Rust. If you installed it before, skip this step.</p>
+       <p>Otherwise install it from <a href="https://rustup.rs" target="_blank" rel="noopener">rustup.rs</a> (on Windows, run <code>rustup-init.exe</code> and accept the defaults), then close and open Chess From Scratch again.</p>`,
+  },
+  {
+    title: "9. Run it",
+    target: "#run-btn",
+    body: () =>
+      `<p>Click <b>▶ Run</b> at the top. The panel at the bottom opens: the app writes your project to a folder, builds it with <code>cargo build --release</code> and starts it.</p>
+       <p>The first build downloads the chess library and takes a minute. When your engine answers <code>uciok</code>, it is running.</p>`,
+    action: { label: "Run it for me", run: (h) => h.runEngine() },
+    done: (h) => h.engineRunning(),
+  },
+  {
+    title: "10. Talk to it",
+    target: "#dock .dock-quick",
+    body: (h) =>
+      `<p>A chess program talks to your engine with UCI commands. Try them with the buttons, or type them in the box at the bottom:</p>
+       <ul><li><b>position startpos</b>: the starting position;</li><li><b>go depth</b>: find a move. ${esc(h.engineName())} answers with a random <code>bestmove</code>, such as <code>bestmove g1f3</code>.</li></ul>
+       <p>Paste a FEN in the long box and click <b>Set position</b> to try any position.</p>`,
+    done: (h) => h.engineAnswered(),
+  },
+  {
+    title: "11. Its folder",
+    target: "#terminal-btn",
+    body: (h) =>
+      `<p>Your engine is a normal Rust project in a folder. <b>Folder</b> in the panel shows it; <b>Terminal</b> at the top opens a terminal there.</p>
+       <p>The program is <code>target/release/${esc(h.crateName())}</code> in that folder (on Windows with <code>.exe</code>). Open the folder in VS Code to read and change the code.</p>`,
+  },
+  {
+    title: "12. Play against it",
+    body: (h) =>
+      `<p>Add the engine to a chess program and play it:</p>
+       <ul><li><a href="https://encroissant.org" target="_blank" rel="noopener">En Croissant</a>: <i>Engines &gt; Add new &gt; Local</i>;</li>
+       <li><a href="https://cutechess.com" target="_blank" rel="noopener">Cute Chess</a>: <i>Tools &gt; Settings &gt; Engines &gt; +</i>, then <i>Game &gt; New</i>;</li>
+       <li>Arena: <i>Engines &gt; Install New Engine</i>.</li></ul>
+       <p>Pick <code>${esc(h.crateName())}</code> in the <code>target/release</code> folder from step 11. It should be easy to beat!</p>`,
+  },
+];
 
 const STEPS: Step[] = [
   {
@@ -106,58 +206,14 @@ const STEPS: Step[] = [
       `<p><code>src/main.rs</code> is where the program starts: the <code>mod</code> lines list its files, and <code>main</code> runs either <code>bench</code> (a speed test) or the UCI loop.</p>
        <p><code>Cargo.toml</code> names the program and its one library, cozy-chess. That is the whole project.</p>`,
   },
-  {
-    title: "8. Get the project onto your computer",
-    target: "#link-folder:not([hidden]), #export",
-    body: (h) =>
-      `${
-        h.canLinkFolders()
-          ? `<p><b>With VS Code (recommended):</b> click <b>Link folder</b> at the top and pick an empty folder. The app writes the project there and keeps it in sync: open that folder in VS Code (<i>File &gt; Open Folder</i>), and changes you save there come back here as blocks.</p><p><b>Or:</b> click <b>Export Rust project</b> to download a zip, and unzip it.</p>`
-          : `<p>Click <b>Export Rust project</b> to download a zip, and unzip it. (In Chrome or Edge you could also <b>Link folder</b> to keep a folder in sync for VS Code.)</p>`
-      }`,
-    done: (h) => h.folderLinked() || h.exported(),
-  },
-  {
-    title: "9. Install Rust (once)",
-    body: () =>
-      `<p>To build the engine you need Rust. If <code>cargo --version</code> already works in a terminal, skip this step.</p>
-       <p>Otherwise install it from <a href="https://rustup.rs" target="_blank" rel="noopener">rustup.rs</a> (on Windows, run <code>rustup-init.exe</code> and accept the defaults), then open a <b>new</b> terminal and check:</p>
-       ${code("cargo --version")}`,
-  },
-  {
-    title: "10. Build it",
-    body: (h) =>
-      `<p>Open a terminal in the project folder (in VS Code: <i>Terminal &gt; New Terminal</i>) and build the fast version:</p>
-       ${code("cargo build --release")}
-       <p>The first build downloads cozy-chess and takes a minute. Your engine is then <code>target/release/${esc(h.crateName())}</code> (on Windows <code>target\\release\\${esc(h.crateName())}.exe</code>).</p>`,
-  },
-  {
-    title: "11. Talk to it",
-    body: (h) =>
-      `<p>Start your engine and type the UCI commands a chess program would send, one per line:</p>
-       ${code(`cargo run --release
-uci
-position startpos
-go
-quit`)}
-       <p>It answers <code>id name ${esc(h.engineName())}</code> and <code>uciok</code> to <code>uci</code>, and a random <code>bestmove</code> such as <code>bestmove g1f3</code> to <code>go</code>. You can also start the program directly: <code>./target/release/${esc(h.crateName())}</code>.</p>`,
-  },
-  {
-    title: "12. Play against it",
-    body: (h) =>
-      `<p>Add the engine to a chess program and play it:</p>
-       <ul><li><a href="https://encroissant.org" target="_blank" rel="noopener">En Croissant</a>: <i>Engines &gt; Add new &gt; Local</i>, pick the file from step 10;</li>
-       <li><a href="https://cutechess.com" target="_blank" rel="noopener">Cute Chess</a>: <i>Tools &gt; Settings &gt; Engines &gt; +</i>, then <i>Game &gt; New</i>;</li>
-       <li>Arena: <i>Engines &gt; Install New Engine</i>.</li></ul>
-       <p>The file is <code>${esc(h.crateName())}</code> in <code>target/release</code>. It should be easy to beat!</p>`,
-  },
+...(isDesktop ? DESKTOP_RUN : WEB_RUN),
   {
     title: "Done: you built a chess engine",
     body: () =>
       `<p>Next steps, one block at a time:</p>
        <ul><li>Swap Random mover for <b>Negamax search</b> and plug in a <b>Hand-crafted evaluation</b> with <b>Material</b>: now it looks ahead and counts pieces.</li>
        <li>Add <b>Iterative deepening</b>, then <b>Alpha-beta pruning</b>, and watch the engine get stronger; right-click any block and choose <i>Explain this block</i>.</li>
-       <li>After each change, build again (step 10) and let the new version play the old one.</li></ul>
+       <li>After each change, ${isDesktop ? "click <b>↻ Rebuild</b>" : "build again (step 10)"} and let the new version play the old one.</li></ul>
        <p>The <a href="guide.html#Home" target="_blank" rel="noopener">guide</a> shows how to change blocks, make your own and build on them. Stuck, or have an idea? Click <b>Feedback</b> at the top.</p>`,
   },
 ];

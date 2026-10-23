@@ -8,6 +8,7 @@ WORKDIR /src
 COPY package.json package-lock.json ./
 COPY packages/codegen/package.json packages/codegen/
 COPY apps/web/package.json apps/web/
+COPY apps/desktop/package.json apps/desktop/
 RUN npm ci
 COPY . .
 RUN npm run build -w @cfs/codegen && npm run build -w @cfs/web

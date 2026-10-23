@@ -13,6 +13,7 @@
 - [Adding files](Adding-Files)
 
 **Your engine**
+- [The desktop app](The-Desktop-App)
 - [Build, test and play](Build-Test-Play)
 - [Saving and sharing](Saving-And-Sharing)
 

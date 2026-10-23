@@ -1,0 +1,60 @@
+# Builds the desktop app for Windows, macOS and Linux and attaches the
+# installers to a draft GitHub release. Start it by pushing a tag like
+# v0.2.0 (git tag v0.2.0 && git push origin v0.2.0), or from the Actions tab.
+# Check the draft on the Releases page, then publish it.
+name: Desktop release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+          - platform: macos-latest
+            args: "--target universal-apple-darwin"
+          - platform: ubuntu-22.04
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - name: System libraries for Tauri (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+      - run: npm ci
+      - run: npm run build -w @cfs/codegen
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'desktop-v__VERSION__' }}
+          releaseName: "Chess From Scratch __VERSION__"
+          releaseBody: |
+            The Chess From Scratch desktop app: build, run and test chess engines, offline.
+            Pick the installer for your computer below. You also need Rust: https://rustup.rs
+            Windows and macOS may warn that the app is from an unknown developer; see the guide page "The desktop app".
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

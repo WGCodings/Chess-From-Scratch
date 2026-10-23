@@ -8,6 +8,7 @@ see the [guide](https://github.com/WGCodings/Chess-From-Scratch/wiki).
 ```
 apps/
   web/             the editor (Vite + TypeScript + Blockly + CodeMirror) and the guide page
+  desktop/         the desktop app (Tauri 2): the same editor plus build, run and a terminal
 packages/
   codegen/         block catalogue, workspace format, Rust templates and project generator
     templates/     every line of Rust an engine can contain (search, eval, uci, tt, ...)
@@ -39,6 +40,31 @@ cargo test --release                      # perft and unit tests for all templat
 cargo build --release -p cfs-reference
 ./target/release/cfs-reference bench      # deterministic node count + nps (OpenBench format)
 ```
+
+## The desktop app
+
+The website is the demo; the desktop app is the full product. Both are the
+same editor (`apps/web`): there is no second UI. The editor asks
+`apps/web/src/platform.ts` what it can do. On the website `desktop` is null
+and desktop features (Run, Terminal) explain the app; in the app it calls the
+Rust commands in `apps/desktop/src-tauri/src` (write the project, cargo build,
+run the engine, a terminal through a pseudo-terminal). New desktop features:
+add a command in Rust, a method on the `Desktop` interface, and the UI in
+`apps/web` once.
+
+Extra requirements: the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
+(on Linux: `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`).
+
+```sh
+npm run desktop                    # the app, with the editor hot-reloading from Vite
+npm run desktop:build              # installers in apps/desktop/src-tauri/target/release/bundle
+npm run selftest -w @cfs/desktop   # builds the debug app and drives it: Run, UCI, bench, terminal
+cd apps/desktop/src-tauri && cargo test
+```
+
+The browser tests fake the desktop with `window.__cfsDesktopMock` (see
+`apps/web/e2e/run.mts`). Releases: push a tag `vX.Y.Z` and the *Desktop
+release* workflow attaches the installers to a draft release.
 
 ## How code generation works
 

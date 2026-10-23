@@ -26,8 +26,10 @@ let failed = 0;
 let passed = 0;
 const pageErrors: string[] = [];
 
-async function newPage(): Promise<Page> {
+async function newPage(init?: () => void): Promise<Page> {
   const ctx = await browser.newContext({ viewport: { width: 1600, height: 2000 }, acceptDownloads: true });
+  // tsx wraps named functions in __name(): define it so a function can be sent to the page.
+  if (init) await ctx.addInitScript(`var __name = (f) => f; (${init.toString()})();`);
   // The tutorial offer would cover part of the canvas; its own test clears this.
   await ctx.addInitScript(() => {
     if (!sessionStorage.getItem("cfs.e2e.offer")) localStorage.setItem("cfs.tutorial.seen", "1");
@@ -41,9 +43,9 @@ async function newPage(): Promise<Page> {
   return p;
 }
 
-async function test(name: string, fn: (p: Page) => Promise<void>): Promise<void> {
+async function test(name: string, fn: (p: Page) => Promise<void>, init?: () => void): Promise<void> {
   if (only && !name.includes(only)) return;
-  const p = await newPage();
+  const p = await newPage(init);
   try {
     await fn(p);
     passed++;
@@ -580,6 +582,117 @@ await test("a first visit is empty, stays empty after a reload, and shows no old
   const code = await p.locator("#code").innerText();
   check(code.includes("No code yet") && code.includes("Plug a search") && !code.includes("fn negamax"), `code pane: ${code.slice(0, 200)}`);
 });
+
+await test("importing a block file only accepts .block.rs files", async (p) => {
+  await p.setInputFiles("#block-file", { name: "search.rs", mimeType: "text/plain", buffer: Buffer.from("fn main() {}") });
+  await p.waitForTimeout(200);
+  check((await toast(p)).includes("is not a block file"), `toast: ${await toast(p)}`);
+  check((await p.locator("#block-file").getAttribute("accept")) === ".rs", "file picker filter");
+});
+
+await test("on the website, Run and Terminal explain the desktop app", async (p) => {
+  await template(p, "starter");
+  await p.click("#run-btn");
+  await p.waitForTimeout(200);
+  check(await p.locator("#dock").isVisible(), "dock not open");
+  check((await p.locator("#dock .dock-notice").first().innerText()).includes("desktop app"), "no desktop notice");
+  await p.click("#terminal-btn");
+  check((await p.locator("#dock .terminal-pane .dock-notice").innerText()).includes("terminal"), "no terminal notice");
+  await p.click("#terminal-btn");
+  check(!(await p.locator("#dock").isVisible()), "Terminal again closes the dock");
+});
+
+/** A fake desktop app: a pretend cargo and a pretend engine that answers UCI. */
+function desktopMock(): void {
+  const calls: unknown[][] = [];
+  let onEvent: ((e: { kind: string; text: string }) => void) | null = null;
+  let onTerm: ((d: string) => void) | null = null;
+  (window as unknown as { __calls: unknown[][] }).__calls = calls;
+  (window as unknown as { __cfsDesktopMock: unknown }).__cfsDesktopMock = {
+    defaultProjectDir: async (name: string) => `/data/engines/${name}`,
+    writeProject: async (dir: string, files: { path: string }[]) => void calls.push(["write", dir, files.map((f) => f.path)]),
+    rustVersion: async () => "cargo 1.90.0",
+    buildEngine: async (dir: string, onLine: (l: string) => void) => {
+      calls.push(["build", dir]);
+      onLine("   Compiling cozy-chess v0.3.4");
+      onLine("    Finished `release` profile [optimized] target(s)");
+      return `${dir}/target/release/engine`;
+    },
+    startEngine: async (program: string, _dir: string, cb: typeof onEvent) => {
+      calls.push(["start", program]);
+      onEvent = cb;
+    },
+    sendEngine: async (line: string) => {
+      calls.push(["send", line]);
+      const say = (t: string) => setTimeout(() => onEvent?.({ kind: "line", text: t }), 5);
+      if (line === "uci") (say("id name Mock"), say("uciok"));
+      else if (line === "isready") say("readyok");
+      else if (line.startsWith("go")) say("bestmove e2e4");
+    },
+    stopEngine: async () => void calls.push(["stop"]),
+    openTerminal: async (dir: string, _c: number, _r: number, cb: (d: string) => void) => {
+      calls.push(["term", dir]);
+      onTerm = cb;
+      cb(`${dir}$ `);
+      return 1;
+    },
+    writeTerminal: async (_id: number, data: string) => onTerm?.(data === "\r" ? "\r\n" : data),
+    resizeTerminal: async () => {},
+    closeTerminal: async () => {},
+    revealFolder: async (dir: string) => void calls.push(["reveal", dir]),
+    openUrl: async (url: string) => void calls.push(["url", url]),
+    pickFolder: async () => null,
+  };
+}
+const calls = (p: Page) => p.evaluate(() => (window as unknown as { __calls: unknown[][] }).__calls);
+
+await test("desktop: Run builds the engine, starts it and you can talk UCI", async (p) => {
+  await template(p, "starter");
+  await p.click("#run-btn");
+  await p.waitForSelector("#dock .out-engine:has-text('uciok')");
+  const c = await calls(p);
+  const write = c.find((x) => x[0] === "write")!;
+  check(write[1] === "/data/engines/my_engine" || String(write[1]).startsWith("/data/engines/"), `dir ${write[1]}`);
+  check((write[2] as string[]).includes("src/search.rs"), "project not written");
+  check(c.some((x) => x[0] === "build") && c.some((x) => x[0] === "start"), JSON.stringify(c));
+  check((await p.locator("#dock .out-build").allInnerTexts()).some((l) => l.includes("Compiling")), "build output not shown");
+  check((await p.locator("#dock").getAttribute("data-state")) === "running", "not running");
+  check((await p.locator("#run-btn").isVisible()) && (await p.locator("#dock .dock-btn.run").innerText()).includes("Rebuild"), "no Rebuild");
+  // Quick buttons and the command line with history.
+  await p.locator("#dock .dock-chip", { hasText: "isready" }).click();
+  await p.waitForSelector("#dock .out-engine:has-text('readyok')");
+  await p.locator("#dock .dock-chip", { hasText: "go depth" }).click();
+  await p.waitForSelector("#dock .out-engine:has-text('bestmove')");
+  check((await calls(p)).some((x) => x[0] === "send" && x[1] === "go depth 6"), "go depth 6 not sent");
+  await p.fill("#dock .dock-fen", "8/8/8/8/8/8/8/K6k w - - 0 1");
+  await p.locator("#dock .dock-chip", { hasText: "Set position" }).click();
+  await p.fill("#dock .dock-input", "go movetime 50");
+  await p.press("#dock .dock-input", "Enter");
+  await p.press("#dock .dock-input", "ArrowUp");
+  check((await p.inputValue("#dock .dock-input")) === "go movetime 50", "history");
+  const sent = (await calls(p)).filter((x) => x[0] === "send").map((x) => x[1]);
+  check(sent.includes("position fen 8/8/8/8/8/8/8/K6k w - - 0 1") && sent.includes("go movetime 50"), JSON.stringify(sent));
+  if (process.env.CFS_SHOTS) await p.screenshot({ path: join(process.env.CFS_SHOTS, "dock.png"), clip: { x: 0, y: 1300, width: 1600, height: 700 } });
+  await p.locator("#dock .dock-btn", { hasText: "Stop" }).click();
+  await p.waitForTimeout(100);
+  check((await p.locator("#dock").getAttribute("data-state")) === "stopped", "not stopped");
+}, desktopMock);
+
+await test("desktop: Run says what is missing, and the terminal opens in the engine folder", async (p) => {
+  await p.click("#run-btn");
+  await p.waitForTimeout(200);
+  check((await p.locator("#dock .out-error").innerText()).includes("Engine block"), "no reason shown");
+  await template(p, "starter");
+  await p.click("#terminal-btn");
+  await p.waitForSelector("#dock .xterm");
+  await p.waitForTimeout(300);
+  const term = (await calls(p)).find((x) => x[0] === "term");
+  check(term && String(term[1]).startsWith("/data/engines/"), JSON.stringify(term));
+  check((await p.locator("#dock .xterm-rows").innerText()).includes("/data/engines/"), "terminal shows no prompt");
+  // Web links open in the browser.
+  await p.click("#feedback-btn");
+  check((await calls(p)).some((x) => x[0] === "url" && String(x[1]).includes("github.com")), "feedback link not opened in the browser");
+}, desktopMock);
 
 await test("the guide shows its pages and links between them", async (p) => {
   await p.goto(url.replace(/\/?$/, "/") + "guide.html");

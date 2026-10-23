@@ -29,8 +29,11 @@
         <button id="save" class="btn" type="button" title="Save the project with its blocks as a .cfs file">Save</button>
         <button id="link-folder" class="btn" type="button" hidden title="Write the project into a folder on your computer and keep it in sync, to edit it in VS Code or any editor">Link folder</button>
         <span id="folder-status" class="folder-status" hidden></span>
+        <button id="terminal-btn" class="btn" type="button" title="A terminal in your engine's folder (desktop app)">Terminal</button>
+        <button id="run-btn" class="btn run" type="button" title="Build your engine and talk to it: uci, go, bench… (desktop app)">▶ Run</button>
         <button id="export" class="btn primary" type="button">Export Rust project</button>
         <input id="file" type="file" accept=".cfs,.zip,.json,.rs,application/json,application/zip" hidden />
+        <input id="block-file" type="file" accept=".rs" hidden />
       </div>
     </header>
 
@@ -62,6 +65,8 @@
         </section>
       </aside>
     </main>
+
+    <section id="dock" hidden aria-label="Run and terminal"></section>
 
     <div id="toast" class="toast" role="status"></div>
     <script type="module" src="/src/main.ts"></script>

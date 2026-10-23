@@ -4,6 +4,8 @@
  */
 
 import { marked } from "marked";
+import { installDesktopLinks } from "./links";
+import { isDesktop } from "./platform";
 import "./style.css";
 
 const raw = import.meta.glob("../../../docs/wiki/*.md", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
@@ -39,3 +41,13 @@ function show(): void {
 }
 window.addEventListener("hashchange", show);
 show();
+
+// In the desktop app the guide is its own window: no way "back", web links open in the browser.
+installDesktopLinks();
+if (isDesktop) {
+  for (const a of document.querySelectorAll<HTMLAnchorElement>('.topbar a[href="./"]')) {
+    if (a.classList.contains("btn")) a.hidden = true;
+    else a.removeAttribute("href");
+  }
+  void import("@tauri-apps/api/event").then(({ listen }) => listen<string>("guide-page", (e) => (location.hash = e.payload)));
+}

@@ -1,5 +1,7 @@
 # Build, test and play
 
+In the [desktop app](The-Desktop-App), **▶ Run** does the building and gives you buttons for the commands below. This page shows how to do it yourself, which works for projects exported from the website too.
+
 ## Build
 
 You need Rust. Install it once from [rustup.rs](https://rustup.rs).
