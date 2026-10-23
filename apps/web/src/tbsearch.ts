@@ -10,6 +10,8 @@ export interface SearchEntry {
   label: string;
   /** Extra words that match (description, slot, id). */
   text: string;
+  /** Greyed out: the block needs another block first. */
+  disabled?: boolean;
 }
 
 export function installToolboxSearch(bw: Blockly.WorkspaceSvg, entries: () => SearchEntry[]): HTMLInputElement {
@@ -41,7 +43,7 @@ export function installToolboxSearch(bw: Blockly.WorkspaceSvg, entries: () => Se
     hits.sort((a, b) => rank(a, q) - rank(b, q) || a.label.localeCompare(b.label));
     flyout?.show([
       { kind: "label", text: hits.length ? `${hits.length} block${hits.length > 1 ? "s" : ""} for “${input.value.trim()}”` : `No blocks for “${input.value.trim()}”` },
-      ...hits.map((h) => ({ kind: "block", type: h.type })),
+      ...hits.map((h) => ({ kind: "block", type: h.type, ...(h.disabled ? { disabledReasons: ["cfs_needs"] } : {}) })),
     ] as Blockly.utils.toolbox.FlyoutItemInfoArray);
   };
   input.addEventListener("input", run);

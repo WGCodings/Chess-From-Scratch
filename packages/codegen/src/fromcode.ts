@@ -10,7 +10,8 @@
  * - Changes to skeleton code are refused: wrap new code in markers instead.
  */
 
-import { evalSpec, searchSpec, type ParamSpec } from "./blocks";
+import { collapseBuiltins } from "./builtin";
+import { evalSpec, searchSpec, skeletonSpec, type ParamSpec } from "./blocks";
 import {
   HOOKS,
   TEMPLATES,
@@ -19,15 +20,17 @@ import {
   findRegions,
   forkBlock,
   freeId,
+  isCustomSlot,
   regionOf,
+  sectionHead,
   serializeBlock,
   type BlockFile,
   type CustomSlot,
   type Section,
 } from "./blockfile";
-import type { Origin } from "./custom";
+import { renderedLines, requirementClosure, traceTemplate, type Origin } from "./custom";
 import type { GeneratedFile } from "./generate";
-import { KNOWN_REGIONS, parseBlock, placedCustomBlocks, type Workspace } from "./workspace";
+import { KNOWN_REGIONS, enabledRegions, parseBlock, placedCustomBlocks, type Workspace } from "./workspace";
 
 type Head = Section extends infer S ? (S extends Section ? Omit<S, "body"> : never) : never;
 
@@ -82,6 +85,11 @@ export interface CodeResult {
   created: { id: string; slot: CustomSlot }[];
   /** Built-in blocks replaced by a new version of them. */
   forks: { base: string; id: string }[];
+  /**
+   * Existing blocks whose code the edits change: ids of your blocks and
+   * built-in types (those get a version). With `onTop` these are left alone.
+   */
+  changed: string[];
   errors: CodeError[];
 }
 
@@ -103,6 +111,13 @@ interface BodyOp {
 const BLOCK_LINE = /^\s*\/\/ @block (\S+)\s*$/;
 const END_LINE = /^\s*\/\/ @end (\S+)\s*$/;
 const HOOK_LINE = /^\s*\/\/ @hook (\w+)\s*$/;
+const MARKER_LINE = /^\s*\/\/ @(block|end|else|hook)\b/;
+
+/** Indentation for code placed after `line`: one level deeper after an opening bracket. */
+function indentAfterLine(line: string): string {
+  const base = /^\s*/.exec(line)![0];
+  return /[{(\[]$/.test(line.trimEnd()) ? `${base}    ` : base;
+}
 
 /** Line hunks turning `a` into `b`: [a0, a1) replaced by [b0, b1). */
 export function lineHunks(a: string[], b: string[]): { a0: number; a1: number; b0: number; b1: number }[] {
@@ -164,8 +179,23 @@ const label = (id: string) => {
  * Applies edits made in the code view. `taken` lists block ids that exist
  * outside this project (My blocks, examples): new blocks may not reuse them.
  */
-export function codeToBlocks(ws: Workspace, files: GeneratedFile[], edits: CodeEdit[], taken: string[] = []): CodeResult {
-  const result: CodeResult = { sources: {}, created: [], forks: [], errors: [] };
+export interface CodeOptions {
+  /**
+   * Turn changes inside existing blocks (your own or built-in) into one new
+   * block that builds on them, instead of changing those blocks.
+   */
+  onTop?: { id: string; label: string };
+}
+
+export function codeToBlocks(
+  ws: Workspace,
+  files: GeneratedFile[],
+  edits: CodeEdit[],
+  taken: string[] = [],
+  options: CodeOptions = {},
+): CodeResult {
+  const result: CodeResult = { sources: {}, created: [], forks: [], changed: [], errors: [] };
+  const enabled = enabledRegions(ws);
   const placed = new Map(placedCustomBlocks(ws).map((b) => [b.id, b]));
   const ops = new Map<string, Map<number, BodyOp[]>>();
   const deleted = new Map<string, Set<number>>();
@@ -173,6 +203,11 @@ export function codeToBlocks(ws: Workspace, files: GeneratedFile[], edits: CodeE
   const fresh = new Map<string, { slot: CustomSlot; requires: Set<string>; label: string }>();
   const forkOps = new Map<string, Map<string, { at: number; remove: number[]; add: string[] }[]>>();
   const usedIds = new Set([...taken, ...placed.keys()]);
+  // A new block on top of the blocks whose code was changed.
+  const layer = options.onTop;
+  const layerRequires = new Set<string>();
+  let layerSlot: CustomSlot | null = null;
+  if (layer) usedIds.add(layer.id);
 
   const known = new Set<string>();
   for (const f of files) for (const m of f.contents.matchAll(/\b(?:const|static)\s+([A-Z][A-Z0-9_]*)/g)) known.add(m[1]!);
@@ -199,9 +234,8 @@ export function codeToBlocks(ws: Workspace, files: GeneratedFile[], edits: CodeE
       fail(1, `${edit.path} is written from your settings and block parameters; it can't be edited here.`);
       continue;
     }
-    const tplName = /^src\/(\w+)\.rs$/.exec(edit.path)?.[1];
+    const tplName = file.template ?? /^src\/(\w+)\.rs$/.exec(edit.path)?.[1];
     const template = tplName && tplName in TEMPLATES ? TEMPLATES[tplName as keyof typeof TEMPLATES] : null;
-    const tplLines = template?.split("\n") ?? [];
     const view = viewOf(file);
     const O = view.lines;
     const E = edit.text.replace(/\n$/, "").split("\n");
@@ -210,7 +244,7 @@ export function codeToBlocks(ws: Workspace, files: GeneratedFile[], edits: CodeE
     const innerOwner = (i: number) => view.owners[i]?.filter((o) => !o.startsWith("!")).at(-1);
     const builtinOwner = (i: number) => {
       const o = innerOwner(i);
-      return o && !o.includes("|") && (searchSpec(o) || o.startsWith("eval_")) && vo[i]!.t === "tpl" ? o : null;
+      return o && !o.includes("|") && (searchSpec(o) || o.startsWith("eval_") || skeletonSpec(o)) && vo[i]!.t === "tpl" ? o : null;
     };
     // The indentation of a custom section's code in the view.
     const sectionIndent = (id: string, section: number) => {
@@ -221,20 +255,58 @@ export function codeToBlocks(ws: Workspace, files: GeneratedFile[], edits: CodeE
     const strip = (lines: string[], indent: string) => lines.map((l) => (l.startsWith(indent) ? l.slice(indent.length) : l.trimStart()));
 
     // What new code is anchored to: the nearest template line or hook above, past other blocks' code.
-    const anchorFor = (at: number): { section: Head | null; index: number } => {
+    // The template as the generator sees it before inserts: anchors count lines there.
+    const traced = template && tplName ? traceTemplate(template, `${tplName}.rs`, [...placed.values()], enabled) : null;
+    // Anchors count the lines that are generated.
+    const shown = traced ? renderedLines(traced.lines, enabled) : [];
+    const sameOrigin = (a: Origin, b: ViewOrigin) =>
+      (a.t === "tpl" && b.t === "tpl" && a.line === b.line) ||
+      (a.t === "body" && b.t === "body" && a.block === b.block && a.section === b.section && a.line === b.line);
+    /**
+     * The anchor text of view line `k` and which of the equal lines it is, counting
+     * generated lines of the template, of versions of built-in blocks and of the
+     * blocks in `builds` (the blocks the new code builds on).
+     */
+    const anchorText = (k: number, builds: ReadonlySet<string>): { anchor: string; nth?: number } | null => {
+      const o = vo[k]!;
+      if ((o.t === "tpl" && o.line < 0) || !traced) return null;
+      const idx = traced.origins.findIndex((x) => sameOrigin(x, o));
+      if (idx < 0) return null;
+      const text = traced.lines[idx]!.trim();
+      const anchorable = (i: number) => {
+        const x = traced.origins[i]!;
+        return shown[i] === true && (x.t === "tpl" || (x.t === "body" && (x.fork === true || builds.has(x.block))));
+      };
+      const same = traced.lines.map((l, i) => ({ l: l.trim(), i })).filter((x) => x.l === text && anchorable(x.i));
+      const nth = same.findIndex((x) => x.i === idx) + 1;
+      return { anchor: text, ...(same.length > 1 ? { nth } : {}) };
+    };
+    /** The blocks a block builds on, with versions standing in for built-in blocks. */
+    const closureOf = (ids: Iterable<string>): Set<string> =>
+      requirementClosure({ id: "\0", requires: [...ids] } as BlockFile, placed);
+    const anchorFor = (at: number): { section: Head | null; index: number; inside?: string } => {
+      let first = true;
       for (let k = at - 1; k >= 0; k--) {
         const o = vo[k]!;
         if (blank(O[k])) continue;
-        if (o.t === "open" || o.t === "body" || o.t === "close") continue;
+        // Right inside the code of one of your blocks: the new code builds on that block.
+        if (first && o.t === "body" && !o.fork && tplName) {
+          let n = at;
+          while (n < O.length && blank(O[n])) n++;
+          const next = vo[n];
+          if (next && (next.t === "body" || next.t === "close") && next.block === o.block) {
+            const a = anchorText(k, closureOf([o.block]));
+            if (a) return { section: { kind: "insert", file: `${tplName}.rs`, ...a, line: 0 }, index: k, inside: o.block };
+          }
+        }
+        first = false;
+        // Code of your version of a block counts as template code; other blocks' code doesn't.
+        if (o.t === "open" || o.t === "close" || (o.t === "body" && !o.fork)) continue;
         if (o.t === "hook") return { section: { kind: "hook", hook: o.name, line: 0 }, index: k };
-        if (o.line < 0 || !tplName) break;
-        const text = tplLines[o.line]!.trim();
-        const same = tplLines.map((l, n) => ({ l: l.trim(), n })).filter((x) => x.l === text);
-        const nth = same.findIndex((x) => x.n === o.line) + 1;
-        return {
-          section: { kind: "insert", file: `${tplName}.rs`, anchor: text, ...(same.length > 1 ? { nth } : {}), line: 0 },
-          index: k,
-        };
+        if (!tplName) break;
+        const a = anchorText(k, new Set());
+        if (!a) break;
+        return { section: { kind: "insert", file: `${tplName}.rs`, ...a, line: 0 }, index: k };
       }
       return { section: null, index: -1 };
     };
@@ -250,13 +322,24 @@ export function codeToBlocks(ws: Workspace, files: GeneratedFile[], edits: CodeE
 
     /** New code at view position `at`: block regions and hook lines. */
     const newCode = (lines: string[], at: number, line0: number) => {
-      const { section: anchor, index } = anchorFor(at);
+      const { section: anchor, index, inside } = anchorFor(at);
+      // Comment lines right above a new block go into it, as its explanation.
+      let comments: string[] = [];
       let k = 0;
       while (k < lines.length) {
         const l = lines[k]!;
         const n = line0 + k + 1;
         if (blank(l)) {
           k++;
+          continue;
+        }
+        if (/^\s*\/\//.test(l) && !BLOCK_LINE.test(l) && !END_LINE.test(l) && !HOOK_LINE.test(l)) {
+          comments.push(l);
+          k++;
+          if (k === lines.length || lines.slice(k).every((x) => blank(x))) {
+            fail(n, `The comment "${l.trim()}" is outside any block. Move it between the \`// @block\` and \`// @end\` lines of a block (right above a block also works).`);
+            return;
+          }
           continue;
         }
         const hook = HOOK_LINE.exec(l);
@@ -270,7 +353,7 @@ export function codeToBlocks(ws: Workspace, files: GeneratedFile[], edits: CodeE
           return;
         }
         if (!start) {
-          fail(n, "Wrap new code in `// @block <name>` and `// @end <name>` lines; it then becomes (part of) a block.");
+          fail(n, `"${l.trim()}" is outside any block. Wrap new code in \`// @block <name>\` and \`// @end <name>\` lines; it then becomes (part of) a block.`);
           return;
         }
         const id = start[1]!;
@@ -289,7 +372,8 @@ export function codeToBlocks(ws: Workspace, files: GeneratedFile[], edits: CodeE
           fail(n, `\`// @block ${id}\` needs a matching \`// @end ${id}\` line.`);
           return;
         }
-        const body = dedent(lines.slice(k + 1, end)).join("\n");
+        const body = dedent([...comments, ...lines.slice(k + 1, end)]).join("\n");
+        comments = [];
         if (!/^[a-z][a-z0-9_]*$/.test(id)) {
           fail(n, `"${id}": block names use lowercase letters, digits and underscores, starting with a letter.`);
         } else if (KNOWN_REGIONS.has(id) || searchSpec(id) || evalSpec(id) || id.startsWith("slot_") || id.startsWith("use_")) {
@@ -300,7 +384,10 @@ export function codeToBlocks(ws: Workspace, files: GeneratedFile[], edits: CodeE
           fail(n, `"${id}" is already a block in My blocks. Drag it into the engine first to add code to it, or pick another name.`);
         } else {
           usedIds.add(id);
-          fresh.set(id, { slot: slotAt(at, anchor!), requires: requiresAt(index, anchor!), label: label(id) });
+          const requires = requiresAt(index, anchor!);
+          if (inside) requires.add(inside);
+          const slot = inside && placed.get(inside) && isCustomSlot(placed.get(inside)!.slot) ? (placed.get(inside)!.slot as CustomSlot) : slotAt(at, anchor!);
+          fresh.set(id, { slot, requires, label: label(id) });
           addSection(id, { ...anchor!, body } as Section);
         }
         k = end + 1;
@@ -348,6 +435,22 @@ export function codeToBlocks(ws: Workspace, files: GeneratedFile[], edits: CodeE
 
     // Indentation of unchanged lines does not matter (formatters may move comments).
     const norm = (ls: string[]) => ls.map((l) => l.trim());
+    type LayerOp = { kind: "replace"; rows: number[]; add: string[]; line: number } | { kind: "insert"; at: number; add: string[]; line: number };
+    const layerOps: LayerOp[] = [];
+    /** Notes the block a change on top builds on, and the new block's slot. */
+    const buildOn = (owner: string, at: number) => {
+      const custom = placed.get(owner);
+      if (owner !== "engine") layerRequires.add(owner);
+      if (layerSlot) return;
+      const spec = searchSpec(owner);
+      if (custom && isCustomSlot(custom.slot)) layerSlot = custom.slot;
+      else if (custom?.base && searchSpec(custom.base)) layerSlot = searchSpec(custom.base)!.slot;
+      else if (spec) layerSlot = spec.slot;
+      else if (evalSpec(owner) || custom?.slot === "eval" || tplName === "eval") layerSlot = "eval";
+      else layerSlot = slotAt(at, { kind: "insert", file: "", anchor: "", line: 0 });
+    };
+    const hasMarkerLines = (ls: string[]) => ls.some((l) => BLOCK_LINE.test(l) || END_LINE.test(l) || HOOK_LINE.test(l));
+
     for (const h of lineHunks(norm(O), norm(E))) {
       const removed = Array.from({ length: h.a1 - h.a0 }, (_, i) => h.a0 + i);
       const add = E.slice(h.b0, h.b1);
@@ -358,6 +461,16 @@ export function codeToBlocks(ws: Workspace, files: GeneratedFile[], edits: CodeE
       if (real.length > 0) {
         const os = real.map((i) => vo[i]!);
         const first = os[0]!;
+        // On top: a change inside one block (yours or built-in) becomes a replacement in the new block.
+        if (layer && !hasMarkerLines(add)) {
+          const blocksTouched = new Set(os.map((o) => (o.t === "body" ? o.block : o.t === "tpl" ? builtinOwner(real[os.indexOf(o)]!) : null)));
+          const owner = [...blocksTouched][0];
+          if (blocksTouched.size === 1 && owner && os.every((o) => o.t === "body" || o.t === "tpl")) {
+            buildOn(owner.startsWith("eval_") ? owner.slice(5) : owner, h.a0);
+            layerOps.push({ kind: "replace", rows: real, add, line });
+            continue;
+          }
+        }
         // Inside one section of a custom block.
         if (first.t === "body" && os.every((o) => o.t === "body" && o.block === first.block && o.section === first.section && o.line >= 0)) {
           const lines = os.map((o) => (o as { line: number }).line);
@@ -394,14 +507,35 @@ export function codeToBlocks(ws: Workspace, files: GeneratedFile[], edits: CodeE
           forkEdit(type, real, null, add, line);
           continue;
         }
-        fail(line, "Skeleton code can't be changed here. Add your own code between `// @block <name>` and `// @end <name>` lines instead.");
+        fail(
+          line,
+          `\`${O[real[0]!]!.trim()}\` is code several blocks share, so it can't be changed here. Add your own code between \`// @block <name>\` and \`// @end <name>\` lines instead.`,
+        );
         continue;
       }
 
       // Pure insertion before view line a0.
       const prev = vo[h.a0 - 1];
       const next = vo[h.a0];
+      // On top: new lines inside a block (yours or built-in) become an insert in the new block.
+      if (layer && !hasMarkerLines(add)) {
+        const ownerOf = (o: ViewOrigin | undefined, i: number) =>
+          o?.t === "body" || o?.t === "open" || o?.t === "close" ? o.block : o?.t === "tpl" ? builtinOwner(i) : null;
+        const pOwner = ownerOf(prev, h.a0 - 1);
+        const nOwner = ownerOf(next, h.a0);
+        if (pOwner && pOwner === nOwner) {
+          buildOn(pOwner.startsWith("eval_") ? pOwner.slice(5) : pOwner, h.a0);
+          layerOps.push({ kind: "insert", at: h.a0, add, line });
+          continue;
+        }
+      }
+      // New block markers inside a block's code make a new block, not part of that block.
+      const newBlock = add.some((l) => {
+        const m = BLOCK_LINE.exec(l);
+        return m && !(prev && "block" in prev && prev.block === m[1]);
+      });
       if (
+        !newBlock &&
         prev &&
         (prev.t === "body" || prev.t === "open") &&
         next &&
@@ -423,7 +557,62 @@ export function codeToBlocks(ws: Workspace, files: GeneratedFile[], edits: CodeE
       }
       newCode(add, h.a0, h.b0);
     }
+
+    // The new block on top: its replacements and inserts, anchored on lines it can see.
+    if (layer && layerOps.length && tplName) {
+      const builds = closureOf(layerRequires);
+      const seeable = (k: number) => {
+        const o = vo[k]!;
+        if (blank(O[k]) || MARKER_LINE.test(O[k]!)) return false;
+        return o.t === "tpl" || (o.t === "body" && (o.fork === true || builds.has(o.block)));
+      };
+      for (const op of layerOps) {
+        const file = `${tplName}.rs`;
+        if (op.kind === "replace") {
+          const a = anchorText(op.rows[0]!, builds);
+          if (!a || op.rows.some((k) => !seeable(k))) {
+            fail(op.line, "This change can't be made in a block on top: change fewer lines, inside one block.");
+            continue;
+          }
+          let to: string | undefined;
+          if (op.rows.length > 1) {
+            to = O[op.rows.at(-1)!]!.trim();
+            // The generator takes the first line equal to `to` below the anchor; it must be the last line changed.
+            const firstEqual = op.rows.find((k, n) => n > 0 && O[k]!.trim() === to);
+            if (firstEqual !== op.rows.at(-1)) {
+              fail(op.line, `The last line you changed, "${to}", appears more than once in the lines you changed; change fewer lines at a time.`);
+              continue;
+            }
+          }
+          const indent = /^\s*/.exec(O[op.rows[0]!]!)![0];
+          const body = dedent(strip(op.add, indent)).join("\n");
+          addSection(layer.id, { kind: "replace", file, ...a, ...(to !== undefined ? { to } : {}), body, line: 0 });
+        } else {
+          let k = op.at - 1;
+          while (k >= 0 && !seeable(k)) k--;
+          let before = false;
+          if (k < 0) {
+            k = op.at;
+            while (k < O.length && !seeable(k)) k++;
+            before = true;
+          }
+          const a = k >= 0 && k < O.length ? anchorText(k, builds) : null;
+          if (!a) {
+            fail(op.line, "New lines here have no line above or below to attach to.");
+            continue;
+          }
+          const indent = before ? /^\s*/.exec(O[k]!)![0] : indentAfterLine(O[k]!);
+          const body = dedent(strip(op.add, indent)).join("\n");
+          addSection(layer.id, { kind: "insert", file, ...a, ...(before ? { before: true } : {}), body, line: 0 });
+        }
+      }
+    }
   }
+  if (layer && added.has(layer.id)) {
+    fresh.set(layer.id, { slot: layerSlot ?? "root", requires: layerRequires, label: layer.label });
+  }
+
+  result.changed = [...new Set([...ops.keys(), ...deleted.keys(), ...forkOps.keys()])];
 
   // Changed and new sections of the project's blocks.
   for (const [id, block] of placed) {
@@ -456,7 +645,7 @@ export function codeToBlocks(ws: Workspace, files: GeneratedFile[], edits: CodeE
   for (const [base, regions] of forkOps) {
     const id = freeId(`my_${base}`, usedIds);
     usedIds.add(id);
-    const src = forkBlock(base, id);
+    const src = forkBlock(base, id, undefined, enabled);
     const block = parseBlock(src).block!;
     const bodies = new Map<number, string>();
     for (const [key, list] of regions) {
@@ -466,7 +655,7 @@ export function codeToBlocks(ws: Workspace, files: GeneratedFile[], edits: CodeE
       const tpl = TEMPLATES[file!.replace(/\.rs$/, "") as keyof typeof TEMPLATES];
       const span = findRegions(tpl, regionOf(base))[Number(index) - 1]!;
       const raw = tpl.split("\n").slice(span.start + 1, span.else ?? span.end);
-      bodies.set(k, dedent(applyOps(raw, list)).join("\n"));
+      bodies.set(k, dedent(collapseBuiltins(applyOps(raw, list), enabled)).join("\n"));
     }
     let text = replaceBodies(src, block, bodies);
     const params = unknownConstants([...bodies.values()].join("\n"), new Set([...known, ...block.params.map((p) => p.rust)]));
@@ -502,16 +691,6 @@ function applyOps(lines: string[], ops: { at: number; remove: number[]; add: str
 function sectionRanges(src: string, block: BlockFile): [number, number][] {
   const total = src.replace(/\n$/, "").split("\n").length;
   return block.sections.map((s, k) => [s.line - 1, (block.sections[k + 1]?.line ?? total + 1) - 1]);
-}
-
-function sectionHead(s: Section): string {
-  return s.kind === "region"
-    ? `// @region ${s.file} ${s.index}`
-    : s.kind === "hook"
-      ? `// @hook ${s.hook}`
-      : s.kind === "insert"
-        ? `// @insert ${s.file} after "${s.anchor}"${s.nth ? ` #${s.nth}` : ""}`
-        : `// @file ${s.path}`;
 }
 
 /** Rewrites a block file's text: patched, removed and new sections; the rest stays as written. */

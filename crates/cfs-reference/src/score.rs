@@ -1,11 +1,16 @@
+// @block engine
 //! Score constants and UCI `info` line formatting.
 
+// @block negamax
 use std::time::Duration;
 
 use cozy_chess::{util::display_uci_move, Board, Move};
+// @end negamax
 
 /// Deepest ply the search may reach.
 pub const MAX_PLY: usize = 128;
+
+// @block negamax
 /// Larger than any real score.
 pub const INF: i32 = 32_000;
 /// Score of delivering mate right now; mate in n plies is `MATE - n`.
@@ -65,6 +70,7 @@ pub fn print_info(board: &Board, info: &IterationInfo) {
         uci_pv(board, info.pv)
     );
 }
+// @end negamax
 
 // @block tests
 #[cfg(test)]
@@ -80,3 +86,4 @@ mod tests {
     }
 }
 // @end tests
+// @end engine

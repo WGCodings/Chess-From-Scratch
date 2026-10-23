@@ -7,6 +7,7 @@
 // Needs cargo on PATH. Uses one shared target directory so cozy-chess is
 // only compiled once.
 
+import { MY_LMR, MY_PVS, layeredEngine } from "../src/layerexample";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,12 +15,14 @@ import { dirname, join } from "node:path";
 import {
   EVAL_TERMS,
   EXAMPLE_BLOCKS,
+  defaultParams,
+  timeBlock,
   SEARCH_BLOCKS,
   codeToBlocks,
   viewOf,
+  SKELETON_TYPES,
   forkBlock,
   newBlockSource,
-  emptyWorkspace,
   generateProject,
   referenceWorkspace,
   starterWorkspace,
@@ -74,6 +77,10 @@ function forked(name: string, types: string[], ws = referenceWorkspace()): Works
   for (const type of types) {
     const id = `my_${type}`;
     ws.customBlocks[id] = forkBlock(type, id);
+    if ((SKELETON_TYPES as string[]).includes(type)) {
+      ws.versions = { ...ws.versions, [type]: id };
+      continue;
+    }
     for (const list of [...Object.values(ws.search.slots), ws.eval.terms]) {
       const at = list.findIndex((b) => b.type === type);
       if (at >= 0) list[at] = { type: id, params: list[at]!.params };
@@ -119,7 +126,58 @@ function fromCode(): Workspace {
   return withBlocks(ws, "from code", r.created.map((c) => [c.id, c.slot, r.sources[c.id]!]));
 }
 
+/** A starter engine with some blocks, for the step-by-step path a beginner takes. */
+function step(name: string, f: (ws: Workspace) => void): Workspace {
+  const ws = starterWorkspace();
+  ws.engine.name = name;
+  f(ws);
+  return ws;
+}
+const term = (type: string) => ({ type, params: defaultParams(EVAL_TERMS[type as keyof typeof EVAL_TERMS].params) });
+const block = (type: string) => ({ type, params: defaultParams(SEARCH_BLOCKS[type as keyof typeof SEARCH_BLOCKS].params) });
+
+const stepCases: { ws: Workspace; bench?: number }[] = [
+  { ws: step("random mover", (ws) => ((ws.search.kind = "random_mover"), (ws.eval.kind = "none"))) },
+  { ws: step("random mover with eval", (ws) => ((ws.search.kind = "random_mover"), ws.eval.terms.push(term("material")))) },
+  { ws: step("step material", (ws) => ws.eval.terms.push(term("material"))) },
+  { ws: step("step psqt", (ws) => ws.eval.terms.push(term("material"), term("psqt"))) },
+  { ws: step("step taper", (ws) => ((ws.eval.taper = true), ws.eval.terms.push(term("material"), term("psqt")))) },
+  {
+    ws: step("step id draw", (ws) => {
+      ws.eval.terms.push(term("material"));
+      ws.search.slots.root.push(block("iterative_deepening"));
+      ws.search.slots.pruning.push(block("draw_detection"));
+    }),
+  },
+  {
+    ws: step("step id ab tm", (ws) => {
+      ws.eval.terms.push(term("material"));
+      ws.search.slots.root.push(block("iterative_deepening"));
+      ws.search.slots.move_loop.push(block("alpha_beta"));
+      ws.engine.timeManagement = timeBlock("time_management");
+    }),
+  },
+  { ws: step("step fixed depth ab", (ws) => (ws.eval.terms.push(term("material")), ws.search.slots.move_loop.push(block("alpha_beta")), (ws.engine.benchDepth = 5))) },
+  {
+    ws: forked("fork skeletons", ["engine", "negamax", "hce", "taper", "transposition_table", "time_management"]),
+    bench: REFERENCE_BENCH,
+  },
+  { ws: forked("fork random mover", ["random_mover", "engine"], step("x", (ws) => ((ws.search.kind = "random_mover"), (ws.eval.kind = "none")))) },
+  { ws: forked("fork psqt", ["psqt", "material", "hce"], step("x", (ws) => ws.eval.terms.push(term("material"), term("psqt")))) },
+];
+
+/** Blocks that build on each other: your alpha-beta, PVS replacing its line, LMR changing PVS. */
+const layered = (name: string, ...blocks: [string, string][]) => {
+  const ws = layeredEngine(...blocks);
+  ws.engine.name = name;
+  ws.eval.terms.push(term("material"));
+  ws.search.slots.root.push(block("iterative_deepening"));
+  return ws;
+};
 const customCases: { ws: Workspace; bench?: number }[] = [
+  ...stepCases,
+  { ws: layered("layer pvs", ["my_pvs", MY_PVS]) },
+  { ws: layered("layer pvs lmr", ["my_pvs", MY_PVS], ["my_lmr", MY_LMR]) },
   { ws: fromCode() },
   { ws: forked("fork nmp", ["null_move_pruning"]), bench: REFERENCE_BENCH },
   {
@@ -171,7 +229,7 @@ const scenarioCases: { ws: Workspace; bench?: number }[] = scenarios()
 const allCases: { ws: Workspace; bench?: number }[] = [
   { ws: referenceWorkspace(), bench: REFERENCE_BENCH },
   { ws: starterWorkspace() },
-  { ws: emptyWorkspace("empty skeleton") },
+  // The empty template has no search yet, so it is not a project to build.
   { ws: bareWith("bare plus mvv lva", ["mvv_lva"]) },
   { ws: bareWith("bare plus alpha beta", ["alpha_beta"]) },
   { ws: bareWith("bare plus ab qs", ["alpha_beta", "quiescence"]) },

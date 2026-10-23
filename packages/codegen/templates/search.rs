@@ -1,3 +1,4 @@
+// @block negamax
 //! Negamax search skeleton. Each placed block sits between
 //! `// @block <name>` and `// @end <name>` markers.
 
@@ -146,14 +147,18 @@ impl Engine for Searcher {
         // @end killers
         // @hook root
 
-        // Work on our own copy of the position; no best move yet.
+        // Work on our own copy of the position.
         let mut pos = pos.clone();
+        // @block iterative_deepening
+        // No best move yet.
         let mut best_move = None;
+        // @end iterative_deepening
         // @block aspiration_windows
         // The last finished iteration's score: the centre of the next aspiration window.
         let mut score = 0;
         // @end aspiration_windows
 
+        // @block iterative_deepening
         // Iterative deepening: search depth 1, 2, 3, ... and keep the last finished result.
         for depth in 1..=self.tm.max_depth {
             self.seldepth = 0;
@@ -196,6 +201,34 @@ impl Engine for Searcher {
                 break;
             }
         }
+        // @else
+        // One search to a fixed depth: NEGAMAX_DEPTH, or the depth `go depth` asks for.
+        let depth = if self.tm.max_depth < MAX_PLY as i32 - 1 {
+            self.tm.max_depth
+        } else {
+            NEGAMAX_DEPTH
+        };
+        self.seldepth = 0;
+        let score = self.search_root(&mut pos, depth);
+        // The best line; its first move is our best move.
+        let line = self.pv.root_line();
+        let best_move = line.first().copied();
+        // Tell the GUI what we found: depth, score, nodes, speed and the best line.
+        if verbose {
+            print_info(
+                pos.board(),
+                &IterationInfo {
+                    depth,
+                    seldepth: self.seldepth,
+                    score,
+                    nodes: self.nodes,
+                    elapsed: self.tm.elapsed(),
+                    hashfull: self.hashfull(),
+                    pv: &line,
+                },
+            );
+        }
+        // @end iterative_deepening
 
         // Hand the best move back to the UCI loop, which prints `bestmove`.
         SearchResult {
@@ -308,10 +341,12 @@ impl Searcher {
             return 0;
         }
         self.seldepth = self.seldepth.max(ply);
+        // @block draw_detection
         // Repetitions and the fifty-move rule are draws.
         if ply > 0 && pos.is_draw() {
             return 0;
         }
+        // @end draw_detection
         if ply >= MAX_PLY - 1 {
             return evaluate(pos.board());
         }
@@ -603,9 +638,12 @@ impl Searcher {
             return 0;
         }
         self.seldepth = self.seldepth.max(ply);
+        // @block draw_detection
+        // Repetitions and the fifty-move rule are draws here too.
         if pos.is_draw() {
             return 0;
         }
+        // @end draw_detection
         let board = pos.board().clone();
         if ply >= MAX_PLY - 1 {
             return evaluate(&board);
@@ -767,3 +805,4 @@ impl History {
 // @end history
 
 // @hook search_helpers
+// @end negamax

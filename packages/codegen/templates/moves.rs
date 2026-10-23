@@ -1,8 +1,11 @@
+// @block engine
 //! Move lists, capture detection and the principal-variation table.
 
 use cozy_chess::{Board, Move, Square};
 
+// @block negamax
 use crate::score::MAX_PLY;
+// @end negamax
 
 // @block mvv_lva|quiescence|killers|history|late_move_reductions|use_is_capture|use_quiet
 use cozy_chess::Piece;
@@ -143,6 +146,7 @@ pub fn is_quiet(board: &Board, mv: Move) -> bool {
 }
 // @end killers|history|late_move_reductions|use_quiet
 
+// @block negamax
 /// Triangular principal-variation table.
 pub struct PvTable {
     lines: Box<[[Option<Move>; MAX_PLY + 1]; MAX_PLY + 1]>,
@@ -185,6 +189,7 @@ impl PvTable {
             .collect()
     }
 }
+// @end negamax
 
 // @block tests
 #[cfg(test)]
@@ -222,3 +227,4 @@ mod tests {
     }
 }
 // @end tests
+// @end engine

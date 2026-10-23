@@ -101,6 +101,16 @@ const cursorToLineEnd = (p: Page, sel: string, n: number) =>
     [sel, n],
   );
 const toast = (p: Page) => p.locator("#toast").innerText();
+/** Answers the "Save your changes" dialog: change the block, or a new block on top with this name. */
+const answerSave = async (p: Page, onTop?: string) => {
+  await p.waitForSelector(".save-choice", { timeout: 4000 });
+  if (onTop !== undefined) {
+    await p.locator('.save-choice input[value="top"]').check();
+    await p.locator(".save-choice .be-field input").fill(onTop);
+  }
+  await p.locator(".save-choice .btn.primary").click();
+  await p.waitForTimeout(900);
+};
 
 // Tests ---------------------------------------------------------------------------------------
 
@@ -158,13 +168,14 @@ await test("Tab indents by four spaces and Format re-indents", async (p) => {
   await openFile(p, "src/search.rs");
   await p.click("#edit-code");
   await p.waitForTimeout(300);
+  const first = (await editorText(p, ".code-editor")).split("\n")[0]!;
   await cursorToLineEnd(p, ".code-editor", 1);
   await p.keyboard.press("Home");
   await p.keyboard.press("Tab");
-  check((await editorText(p, ".code-editor")).startsWith("    //!"), "Tab did not indent");
+  check((await editorText(p, ".code-editor")).startsWith(`    ${first}`), "Tab did not indent");
   // Mess up some indentation, then Format.
   const t = await editorText(p, ".code-editor");
-  await setEditorText(p, ".code-editor", t.replace("        self.pv.clear(ply);", "self.pv.clear(ply);").replace(/^ {4}\/\/!/, "//!"));
+  await setEditorText(p, ".code-editor", t.replace("        self.pv.clear(ply);", "self.pv.clear(ply);").replace(/^ {4}/, ""));
   await p.click("#format-code");
   await p.waitForTimeout(200);
   check((await editorText(p, ".code-editor")).includes("\n        self.pv.clear(ply);"), "Format did not fix the indentation");
@@ -193,20 +204,135 @@ await test("autocompletion knows cozy-chess and the skeleton", async (p) => {
   await p.keyboard.press("Escape");
 });
 
-await test("the error list explains a skeleton edit and can be closed", async (p) => {
+await test("Ctrl+Space opens suggestions, Tab takes one, and calls show their parameters", async (p) => {
   await template(p, "starter");
   await openFile(p, "src/search.rs");
   await p.click("#edit-code");
   await p.waitForTimeout(300);
   const t = await editorText(p, ".code-editor");
-  await setEditorText(p, ".code-editor", t.replace("self.pv.clear(ply);", "self.pv.clear(0);"));
+  const n = t.split("\n").findIndex((l) => l.trim() === "// @hook leaf") + 1;
+  await cursorToLineEnd(p, ".code-editor", n);
+  await p.keyboard.press("Enter");
+  await p.keyboard.press("Control+Space");
+  await p.waitForTimeout(400);
+  const all = await p.locator(".cm-tooltip-autocomplete li").allInnerTexts();
+  check(all.some((i) => i.startsWith("pos")), `Ctrl+Space: ${all.slice(0, 6).join(", ")}`);
+  await p.keyboard.press("Escape");
+  await p.keyboard.type("pos.boa");
+  await p.waitForTimeout(400);
+  await p.keyboard.press("Tab");
+  await p.keyboard.type(".piece_on");
+  await p.waitForTimeout(400);
+  await p.keyboard.press("Tab");
+  await p.waitForTimeout(300);
+  const line = await p.evaluate(() => {
+    const v = (document.querySelector(".code-editor") as unknown as { editorView: { state: { doc: { lineAt(n: number): { text: string } } ; selection: { main: { head: number } } } } }).editorView;
+    return v.state.doc.lineAt(v.state.selection.main.head).text.trim();
+  });
+  check(line === "pos.board().piece_on()", `Tab did not complete: ${line}`);
+  const sig = await p.locator(".cm-sig").allInnerTexts();
+  check(sig.some((s) => s.includes("square: Square")), `signature: ${sig.join(" | ")}`);
+  await p.keyboard.press("Escape");
+});
+
+await test("the error list explains a broken edit and can be closed", async (p) => {
+  await template(p, "starter");
+  await openFile(p, "src/search.rs");
+  await p.click("#edit-code");
+  await p.waitForTimeout(300);
+  const t = await editorText(p, ".code-editor");
+  await setEditorText(p, ".code-editor", t.replace("// @block negamax\n", ""));
   await p.click("#save-code");
   await p.waitForTimeout(500);
   const errs = await p.locator("#code-errors li").allInnerTexts();
-  check(errs.some((e) => e.includes("Skeleton code")), `errors: ${errs.join(" | ")}`);
+  check(errs.some((e) => e.includes("Keep the")), `errors: ${errs.join(" | ")}`);
   await p.click(".code-errors-x");
   check(await p.locator("#code-errors").isHidden(), "error list did not close");
   await p.click("#cancel-code");
+});
+
+await test("editing skeleton code makes your own Negamax, with only the code in your engine", async (p) => {
+  await template(p, "starter");
+  await openFile(p, "src/search.rs");
+  await p.click("#edit-code");
+  await p.waitForTimeout(300);
+  const t = await editorText(p, ".code-editor");
+  await setEditorText(p, ".code-editor", t.replace("self.pv.clear(ply);", "self.pv.clear(ply); // mine"));
+  await p.click("#save-code");
+  await answerSave(p);
+  check(await p.locator("#code-editor").isHidden(), `still editing: ${await p.locator("#code-errors").innerText()}`);
+  check((await blockOnCanvas(p, "My negamax search").count()) === 1, "your Negamax is not on the canvas");
+  check((await openFile(p, "src/search.rs")).includes("self.pv.clear(ply); // mine"), "edit not in the code");
+  const block = await openFile(p, "blocks/my_negamax.block.rs");
+  check(block.includes("// @builtin") && !block.includes("killers.push"), "your Negamax holds code of blocks not in the engine");
+});
+
+/** Puts a built-in search block into the Negamax block's slot input. */
+const placeSearchBlock = (p: Page, type: string, input: string) =>
+  p.evaluate(
+    ([t, name]) => {
+      const bw = (window as unknown as { __cfsWorkspace: import("blockly").WorkspaceSvg }).__cfsWorkspace;
+      const negamax = bw.getBlocksByType("cfs_negamax", false)[0]!;
+      const b = bw.newBlock(t!);
+      b.initSvg();
+      b.render();
+      let conn = negamax.getInput(name!)!.connection!;
+      while (conn.targetBlock()) conn = conn.targetBlock()!.nextConnection!;
+      conn.connect(b.previousConnection!);
+    },
+    [type, input],
+  );
+
+await test("Edit this block on Alpha-beta shows only the code of blocks in the engine", async (p) => {
+  await template(p, "starter");
+  await placeSearchBlock(p, "cfs_search_alpha_beta", "MOVE_LOOP");
+  await p.waitForTimeout(600);
+  await rightClick(p, "Alpha-beta pruning", "Edit this block");
+  const src = await editorText(p, ".be-code");
+  check(src.includes("// @builtin killers"), "no @builtin line for Killers");
+  for (const word of ["killers.push", "history.update", "LMR_MIN", "zero-window"]) check(!src.includes(word), `shows ${word}`);
+  await p.locator(".be-foot .btn.primary").click();
+  await p.waitForTimeout(800);
+  // Adding a block it contains later still works with your version.
+  await placeSearchBlock(p, "cfs_search_killers", "ORDERING");
+  await p.waitForTimeout(600);
+  check((await openFile(p, "src/search.rs")).includes("self.killers.push(ply, mv);"), "Killers code missing in your alpha-beta");
+});
+
+await test("the drawer greys out blocks that need another block, and PVS only goes under Alpha-beta", async (p) => {
+  await template(p, "starter");
+  const enabledInDrawer = async (category: string, label: string) => {
+    await p.locator(".blocklyToolboxCategory", { hasText: category }).first().click();
+    await p.waitForTimeout(300);
+    return p.evaluate((l) => {
+      const bw = (window as unknown as { __cfsWorkspace: import("blockly").WorkspaceSvg }).__cfsWorkspace;
+      const fly = bw.getFlyout()?.getWorkspace() ?? (bw.getToolbox() as import("blockly").Toolbox).getFlyout()!.getWorkspace();
+      const b = fly.getTopBlocks(false).find((x) => x.toString().includes(l));
+      return b ? b.isEnabled() : null;
+    }, label);
+  };
+  check((await enabledInDrawer("Move loop", "Principal variation")) === false, "PVS is not greyed out without Alpha-beta");
+  check((await enabledInDrawer("Move loop", "Alpha-beta")) === true, "Alpha-beta is greyed out");
+  await placeSearchBlock(p, "cfs_search_alpha_beta", "MOVE_LOOP");
+  await p.waitForTimeout(600);
+  check((await enabledInDrawer("Move loop", "Principal variation")) === true, "PVS still greyed out with Alpha-beta");
+  // PVS snaps below Alpha-beta, not above it.
+  const result = await p.evaluate(() => {
+    const bw = (window as unknown as { __cfsWorkspace: import("blockly").WorkspaceSvg }).__cfsWorkspace;
+    const negamax = bw.getBlocksByType("cfs_negamax", false)[0]!;
+    const ab = bw.getBlocksByType("cfs_search_alpha_beta", false)[0]!;
+    const pvs = bw.newBlock("cfs_search_principal_variation_search");
+    pvs.initSvg();
+    pvs.render();
+    const checker = bw.connectionChecker;
+    const top = negamax.getInput("MOVE_LOOP")!.connection!;
+    const r = 1000;
+    return {
+      above: checker.canConnect(pvs.previousConnection as never, top as never, true, r),
+      below: checker.canConnect(pvs.previousConnection as never, ab.nextConnection as never, true, r),
+    };
+  });
+  check(!result.above && result.below, `above ${result.above}, below ${result.below}`);
 });
 
 await test("editing a built-in block in the code makes your own version", async (p) => {
@@ -217,9 +343,60 @@ await test("editing a built-in block in the code makes your own version", async 
   const t = await editorText(p, ".code-editor");
   await setEditorText(p, ".code-editor", t.replace("let r = NMP_BASE_REDUCTION + depth / NMP_DEPTH_DIVISOR;", "let r = NMP_BASE_REDUCTION + depth / NMP_DEPTH_DIVISOR + depth / 8;"));
   await p.click("#save-code");
-  await p.waitForTimeout(900);
+  await answerSave(p);
   check((await blockOnCanvas(p, "My null move pruning").count()) === 1, `no fork: ${await toast(p)}`);
   check((await openFile(p, "src/search.rs")).includes("+ depth / 8;"), "edit not in code");
+});
+
+await test("a change inside a built-in block can be saved as a new block on top of it", async (p) => {
+  await template(p, "reference");
+  await openFile(p, "src/search.rs");
+  await p.click("#edit-code");
+  await p.waitForTimeout(300);
+  const t = await editorText(p, ".code-editor");
+  await setEditorText(p, ".code-editor", t.replace("let r = NMP_BASE_REDUCTION + depth / NMP_DEPTH_DIVISOR;", "let r = NMP_BASE_REDUCTION + depth / NMP_DEPTH_DIVISOR + depth / 8;"));
+  await p.click("#save-code");
+  await answerSave(p, "Deeper NMP");
+  check((await blockOnCanvas(p, "Deeper NMP").count()) === 1, `no new block: ${await toast(p)}`);
+  check((await blockOnCanvas(p, "Null move pruning").count()) >= 1, "Null move pruning was replaced");
+  check((await openFile(p, "src/search.rs")).includes("+ depth / 8;"), "edit not in code");
+  const block = await openFile(p, "blocks/deeper_nmp.block.rs");
+  check(block.includes("requires: null_move_pruning") && block.includes("// @replace search.rs"), `block file: ${block.slice(0, 400)}`);
+});
+
+await test("New block on top of this one: your block's lines changed in a block that builds on it", async (p) => {
+  await template(p, "starter");
+  await placeSearchBlock(p, "cfs_search_alpha_beta", "MOVE_LOOP");
+  await p.waitForTimeout(600);
+  // Your own alpha-beta first, then PVS on top of it.
+  await rightClick(p, "Alpha-beta pruning", "Edit this block");
+  await p.locator(".be-foot .btn.primary").click();
+  await p.waitForTimeout(800);
+  await rightClick(p, "My alpha-beta pruning", "New block on top of this one");
+  await p.locator(".save-choice .be-field input").fill("My PVS");
+  await p.locator(".save-choice .btn.primary").click();
+  await p.waitForTimeout(500);
+  check(!(await p.locator("#code-editor").isHidden()), "not editing");
+  const t = await editorText(p, ".code-editor");
+  const pvs = [
+    "let mut score;",
+    "            if i == 0 {",
+    "                score = -self.negamax(pos, new_depth, ply + 1, -beta, -alpha);",
+    "            } else {",
+    "                score = -self.negamax(pos, new_depth, ply + 1, -alpha - 1, -alpha);",
+    "                if score > alpha && score < beta {",
+    "                    score = -self.negamax(pos, new_depth, ply + 1, -beta, -alpha);",
+    "                }",
+    "            }",
+  ].join("\n");
+  await setEditorText(p, ".code-editor", t.replace("let score = -self.negamax(pos, new_depth, ply + 1, -beta, -alpha);", pvs));
+  await p.click("#save-code");
+  await p.waitForTimeout(900);
+  check((await blockOnCanvas(p, "My PVS").count()) === 1, `no PVS block: ${await p.locator("#code-errors").innerText()} ${await toast(p)}`);
+  const block = await openFile(p, "blocks/my_pvs.block.rs");
+  check(block.includes("requires: my_alpha_beta") && block.includes("// @replace search.rs"), `block file: ${block.slice(0, 500)}`);
+  check(!(await openFile(p, "blocks/my_alpha_beta.block.rs")).includes("let mut score;"), "your alpha-beta changed");
+  check((await p.locator("#issues").innerText()).includes("Ready"), `not ready: ${await p.locator("#issues").innerText()}`);
 });
 
 await test("Edit this block forks a built-in block in the block editor", async (p) => {
@@ -313,11 +490,13 @@ await test("linked folder: files written, edits come back as blocks", async (p) 
 
   // A broken edit is explained, not applied; fixing it applies.
   const now = await read("src/search.rs");
-  await write("src/search.rs", now.replace("self.pv.clear(ply);", "self.pv.clear(0);"));
+  await write("src/search.rs", now.replace("// @block negamax\n", ""));
   await p.waitForTimeout(2500);
-  check((await p.locator("#code-errors").innerText()).includes("Skeleton code"), "error not shown");
+  check((await p.locator("#code-errors").innerText()).includes("Keep the"), "error not shown");
   await write("src/search.rs", now.replace("extension += 1;", "extension += 1; // one ply"));
-  await p.waitForTimeout(2500);
+  // A change inside one of your blocks: the app asks whether to change it or build on it.
+  await answerSave(p);
+  await p.waitForTimeout(1500);
   check((await read("blocks/from_vscode.block.rs")).includes("// one ply"), "fix not applied");
 
   // Editing the block file itself updates the block.

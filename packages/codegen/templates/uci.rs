@@ -1,3 +1,4 @@
+// @block engine
 //! The UCI protocol loop. The search runs on its own thread so `stop`,
 //! `isready` and `quit` are answered while it thinks.
 
@@ -316,3 +317,4 @@ mod tests {
     }
 }
 // @end tests
+// @end engine

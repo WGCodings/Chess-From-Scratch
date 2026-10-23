@@ -1,10 +1,16 @@
-//! Hand-crafted evaluation: the sum of the placed terms, tapered by phase.
+// @block hce
+//! Hand-crafted evaluation: the sum of the placed terms.
 //!
 //! Every term returns a middlegame/endgame pair [`S`] from White's point of
-//! view; `evaluate` adds them up, blends them by game phase and flips the
-//! sign for Black.
+//! view; `evaluate` adds them up, turns the pair into one score (blended by
+//! game phase with the Tapered evaluation block, else the middlegame value)
+//! and flips the sign for Black.
 
 #![allow(unused_imports, unused_mut)]
+// @block random_mover
+// The random mover doesn't evaluate positions yet.
+#![allow(dead_code)]
+// @end random_mover
 
 use std::ops::{Add, AddAssign, Mul, Neg, Sub, SubAssign};
 
@@ -19,6 +25,16 @@ use crate::params::*;
 pub fn evaluate(board: &Board) -> i32 {
     // Start from zero and add every placed term.
     let mut score = S::default();
+
+    // @block eval_material
+    // Material: what each piece is worth.
+    score += material(board);
+    // @end eval_material
+
+    // @block eval_psqt
+    // Piece-square tables: a bonus or penalty for each piece on each square (see psqt.rs).
+    score += crate::psqt::psqt(board);
+    // @end eval_psqt
 
     // @block eval_pesto
     // Material and piece-square tables: what each piece is worth on each square.
@@ -47,9 +63,15 @@ pub fn evaluate(board: &Board) -> i32 {
 
     // @hook eval
 
+    // @block taper
     // Blend middlegame and endgame by game phase. Terms score from White's point of view, so
     // flip the sign when Black is to move.
     let white = taper(score, phase(board));
+    // @else
+    // One score: the middlegame value. Terms score from White's point of view, so flip the
+    // sign when Black is to move.
+    let white = score.0;
+    // @end taper
     match board.side_to_move() {
         Color::White => white,
         Color::Black => -white,
@@ -101,6 +123,7 @@ impl Mul<i32> for S {
     }
 }
 
+// @block taper
 /// Phase weights per piece; 24 is a full middlegame, 0 a pawn endgame.
 pub const PHASE_MAX: i32 = 24;
 const PHASE_WEIGHT: [i32; 6] = [0, 1, 1, 2, 4, 0];
@@ -120,14 +143,33 @@ pub fn phase(board: &Board) -> i32 {
 pub fn taper(score: S, phase: i32) -> i32 {
     (score.0 * phase + score.1 * (PHASE_MAX - phase)) / PHASE_MAX
 }
+// @end taper
 
-// @block eval_pesto|eval_mobility|eval_bishop_pair|eval_rook_files|eval_passed_pawns
+// @block eval_material|eval_pesto|eval_mobility|eval_bishop_pair|eval_rook_files|eval_passed_pawns
 /// Sums `term(color)` for White minus the same for Black.
 #[inline]
 fn both(mut term: impl FnMut(Color) -> S) -> S {
     term(Color::White) - term(Color::Black)
 }
-// @end eval_pesto|eval_mobility|eval_bishop_pair|eval_rook_files|eval_passed_pawns
+// @end eval_material|eval_pesto|eval_mobility|eval_bishop_pair|eval_rook_files|eval_passed_pawns
+
+// @block eval_material
+/// Material: each piece's value times how many there are, White minus Black.
+fn material(board: &Board) -> S {
+    let values = [
+        (Piece::Pawn, PAWN_VALUE),
+        (Piece::Knight, KNIGHT_VALUE),
+        (Piece::Bishop, BISHOP_VALUE),
+        (Piece::Rook, ROOK_VALUE),
+        (Piece::Queen, QUEEN_VALUE),
+    ];
+    both(|color| {
+        values.iter().fold(S::default(), |s, &(piece, value)| {
+            s + value * board.colored_pieces(color, piece).len() as i32
+        })
+    })
+}
+// @end eval_material
 
 // @block eval_pesto
 // ---------------------------------------------------------------------------
@@ -451,3 +493,4 @@ mod tests {
     }
 }
 // @end tests
+// @end hce

@@ -7,37 +7,36 @@ import {
   EVAL_TERMS,
   SEARCH_BLOCKS,
   SEARCH_SLOTS,
-  TIME_BLOCKS,
-  TRANSPOSITION_TABLE,
+  SKELETON_TYPES,
   defaultParams,
   emptyWorkspace,
   evalSpec,
+  isCustomSlot,
   normalizeWorkspace,
   parseBlock,
   searchSpec,
+  skeletonSpec,
+  type BlockFile,
   type BlockInstance,
   type EvalTermType,
   type ParamSpec,
   type Params,
   type Score,
   type SearchBlockType,
+  type SkeletonType,
   type TimeBlockType,
   type Workspace,
 } from "@cfs/codegen";
 import {
-  BASIC_TIME_BLOCK,
   CUSTOM_PREFIX,
-  ENGINE,
-  HCE,
-  NEGAMAX,
+  SKELETON_BLOCK,
   SLOT_INPUT,
-  TIME,
-  TT,
   customType,
   defineCustomBlock,
   evalType,
   fieldNames,
   searchType,
+  skeletonOf,
 } from "./blocks";
 
 const SEARCH_BY_BLOCK = new Map(
@@ -88,9 +87,32 @@ export interface ReadResult {
 /** Looks up the source of a custom block by id (project, then library, then examples). */
 export type BlockSource = (id: string) => string | undefined;
 
+/** A skeleton block on the canvas: built in, or your own version of one. */
+interface SkeletonBlock {
+  type: SkeletonType;
+  /** Your version's block file, when it is one. */
+  version?: BlockFile;
+  source?: string;
+}
+
+/** What skeleton a Blockly block is, without recording anything. */
+export function skeletonBlock(b: Blockly.Block, sourceOf: BlockSource): SkeletonBlock | null {
+  const builtin = skeletonOf(b.type);
+  if (builtin) return { type: builtin };
+  if (!b.type.startsWith(CUSTOM_PREFIX)) return null;
+  const source = sourceOf(b.type.slice(CUSTOM_PREFIX.length));
+  const version = source === undefined ? null : parseBlock(source).block;
+  if (!version?.base || isCustomSlot(version.slot) || !(SKELETON_TYPES as string[]).includes(version.base)) return null;
+  return { type: version.base as SkeletonType, version, source };
+}
+
+const TIME_TYPES: readonly SkeletonType[] = ["time_management", "basic_time"];
+
 /** Reads the engine assembled in a Blockly workspace. */
 export function readWorkspace(bw: Blockly.Workspace, sourceOf: BlockSource = () => undefined): ReadResult {
-  const engines = bw.getBlocksByType(ENGINE, false).filter((b) => b.isEnabled());
+  const engines = bw
+    .getAllBlocks(false)
+    .filter((b) => b.isEnabled() && skeletonBlock(b, sourceOf)?.type === "engine");
   if (engines.length === 0) {
     return { workspace: null, problems: ["Drag an Engine block onto the workspace to start."] };
   }
@@ -98,18 +120,34 @@ export function readWorkspace(bw: Blockly.Workspace, sourceOf: BlockSource = () 
   const problems: string[] = [];
   const ws = emptyWorkspace(String(engine.getFieldValue("NAME")), String(engine.getFieldValue("AUTHOR")));
   ws.engine.benchDepth = Number(engine.getFieldValue("BENCH_DEPTH"));
+  ws.versionParams = {};
+
+  /** The skeleton a block is; a version is recorded with its parameters. */
+  const skeleton = (b: Blockly.Block | undefined) => {
+    const info = b ? skeletonBlock(b, sourceOf) : null;
+    if (!b || !info) return null;
+    const specs = info.version ? info.version.params : (skeletonSpec(info.type)?.params ?? []);
+    if (info.version) {
+      ws.customBlocks![info.version.id] = info.source!;
+      ws.versions![info.type] = info.version.id;
+    }
+    return { ...info, params: readParams(b, specs) };
+  };
+
+  const root = skeleton(engine)!;
+  if (root.version) ws.versionParams.engine = root.params;
 
   for (const b of stack(engine, "SETTINGS")) {
-    const time: TimeBlockType | null =
-      b.type === TIME ? "time_management" : b.type === BASIC_TIME_BLOCK ? "basic_time" : null;
-    if (time) {
+    const info = skeleton(b);
+    if (!info) continue;
+    if (TIME_TYPES.includes(info.type)) {
       if (ws.engine.timeManagement) {
         problems.push("Use only one time management block.");
       } else {
-        ws.engine.timeManagement = { type: time, params: readParams(b, TIME_BLOCKS[time].params) };
+        ws.engine.timeManagement = { type: info.type as TimeBlockType, params: info.params };
       }
     }
-    if (b.type === TT) ws.engine.transpositionTable = readParams(b, TRANSPOSITION_TABLE.params);
+    if (info.type === "transposition_table") ws.engine.transpositionTable = info.params;
   }
 
   // Custom blocks: their parameters come from their block file.
@@ -126,30 +164,38 @@ export function readWorkspace(bw: Blockly.Workspace, sourceOf: BlockSource = () 
     return { type: id, params: block ? readParams(b, block.params) : {} };
   };
 
-  const search = stack(engine, "SEARCH")[0];
-  if (search?.type === NEGAMAX) {
+  const searchBlock = stack(engine, "SEARCH")[0];
+  const search = skeleton(searchBlock);
+  if (search?.type === "negamax") {
+    ws.search.kind = "negamax";
+    ws.search.params = search.params;
     for (const slot of SEARCH_SLOTS) {
-      for (const b of stack(search, SLOT_INPUT[slot])) {
+      for (const b of stack(searchBlock!, SLOT_INPUT[slot])) {
         const type = SEARCH_BY_BLOCK.get(b.type);
         if (type) ws.search.slots[slot].push({ type, params: readParams(b, SEARCH_BLOCKS[type].params) });
         const c = custom(b);
         if (c) ws.search.slots[slot].push(c);
       }
     }
-  } else {
-    problems.push("Plug a Negamax search block into the engine's search slot.");
+  } else if (search?.type === "random_mover") {
+    ws.search.kind = "random_mover";
+    if (search.version) ws.versionParams.random_mover = search.params;
   }
 
-  const evaluation = stack(engine, "EVAL")[0];
-  if (evaluation?.type === HCE) {
-    for (const b of stack(evaluation, "TERMS")) {
+  const evalBlock = stack(engine, "EVAL")[0];
+  const evaluation = skeleton(evalBlock);
+  if (evaluation?.type === "hce") {
+    ws.eval.kind = "hce";
+    if (evaluation.version) ws.versionParams.hce = evaluation.params;
+    const taper = skeleton(stack(evalBlock!, "TAPER")[0]);
+    ws.eval.taper = taper?.type === "taper";
+    if (taper?.version) ws.versionParams.taper = taper.params;
+    for (const b of stack(evalBlock!, "TERMS")) {
       const type = EVAL_BY_BLOCK.get(b.type);
       if (type) ws.eval.terms.push({ type, params: readParams(b, EVAL_TERMS[type].params) });
       const c = custom(b);
       if (c) ws.eval.terms.push(c);
     }
-  } else {
-    problems.push("Plug a Hand-crafted evaluation block into the engine's evaluation slot.");
   }
 
   return { workspace: ws, problems };
@@ -202,32 +248,61 @@ export function engineState(ws: Workspace, x = 40, y = 40): BlockState {
     const spec = evalSpec(b.type);
     return spec ? { type: evalType(b.type as EvalTermType), fields: paramFields(spec.params, b.params) } : customState(b);
   };
+  /** A skeleton block, or your version of it when the workspace has one. */
+  const skeletonState = (
+    type: SkeletonType,
+    params: Params | undefined,
+    children: [string, BlockState[]][] = [],
+    fields: Record<string, string | number> = {},
+  ): BlockState => {
+    const id = ws.versions?.[type];
+    const version = id ? parseBlock(ws.customBlocks?.[id] ?? "").block : null;
+    const specs = version ? version.params : (skeletonSpec(type)?.params ?? []);
+    return {
+      type: version ? customType(version.id) : SKELETON_BLOCK[type],
+      fields: { ...fields, ...paramFields(specs, params ?? {}) },
+      inputs: inputs(children),
+    };
+  };
+  const vp = ws.versionParams ?? {};
   const settings: BlockState[] = [];
   const tm = ws.engine.timeManagement;
-  if (tm) {
-    settings.push({
-      type: tm.type === "time_management" ? TIME : BASIC_TIME_BLOCK,
-      fields: paramFields(TIME_BLOCKS[tm.type].params, tm.params),
-    });
+  if (tm) settings.push(skeletonState(tm.type, tm.params));
+  if (ws.engine.transpositionTable) settings.push(skeletonState("transposition_table", ws.engine.transpositionTable));
+  const search: BlockState[] = [];
+  if (ws.search.kind === "negamax") {
+    search.push(
+      skeletonState(
+        "negamax",
+        ws.search.params,
+        SEARCH_SLOTS.map((slot) => [SLOT_INPUT[slot], (ws.search.slots[slot] ?? []).map(searchState)]),
+      ),
+    );
+  } else if (ws.search.kind === "random_mover") {
+    search.push(skeletonState("random_mover", vp.random_mover));
   }
-  if (ws.engine.transpositionTable) {
-    settings.push({ type: TT, fields: paramFields(TRANSPOSITION_TABLE.params, ws.engine.transpositionTable) });
+  const evaluation: BlockState[] = [];
+  if (ws.eval.kind === "hce") {
+    evaluation.push(
+      skeletonState("hce", vp.hce, [
+        ["TAPER", ws.eval.taper ? [skeletonState("taper", vp.taper)] : []],
+        ["TERMS", ws.eval.terms.map(evalState)],
+      ]),
+    );
   }
-  const negamax: BlockState = {
-    type: NEGAMAX,
-    inputs: inputs(SEARCH_SLOTS.map((slot) => [SLOT_INPUT[slot], (ws.search.slots[slot] ?? []).map(searchState)])),
-  };
-  const hce: BlockState = { type: HCE, inputs: inputs([["TERMS", ws.eval.terms.map(evalState)]]) };
   return {
-    type: ENGINE,
+    ...skeletonState(
+      "engine",
+      vp.engine,
+      [
+        ["SETTINGS", settings],
+        ["SEARCH", search],
+        ["EVAL", evaluation],
+      ],
+      { NAME: ws.engine.name, AUTHOR: ws.engine.author, BENCH_DEPTH: ws.engine.benchDepth },
+    ),
     x,
     y,
-    fields: { NAME: ws.engine.name, AUTHOR: ws.engine.author, BENCH_DEPTH: ws.engine.benchDepth },
-    inputs: inputs([
-      ["SETTINGS", settings],
-      ["SEARCH", [negamax]],
-      ["EVAL", [hce]],
-    ]),
   };
 }
 
@@ -249,7 +324,8 @@ export function loadWorkspace(bw: Blockly.Workspace, ws: Workspace): void {
 /** Parses a workspace.json file, filling parameters missing from older files. */
 export function parseWorkspaceFile(text: string): Workspace {
   const data = JSON.parse(text) as Partial<Workspace>;
-  if (data?.format !== 1 || !data.engine || !data.search || !data.eval) {
+  if ((data?.format as number) !== 1 && data?.format !== 2) throw new Error("This is not a Chess From Scratch workspace file.");
+  if (!data.engine || !data.search || !data.eval) {
     throw new Error("This is not a Chess From Scratch workspace file.");
   }
   const base = emptyWorkspace();
@@ -263,6 +339,7 @@ export function parseWorkspaceFile(text: string): Workspace {
     ...base,
     ...data,
     engine: engine as Workspace["engine"],
-    search: { ...base.search, slots: { ...base.search.slots, ...data.search.slots } },
+    search: { ...base.search, ...data.search, slots: { ...base.search.slots, ...data.search.slots } },
+    eval: { ...base.eval, ...data.eval },
   } as Workspace);
 }

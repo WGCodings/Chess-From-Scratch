@@ -93,11 +93,40 @@ describe("parseBlockFile", () => {
     expect(parseBlockFile("fn x() {}").block).toBeNull();
   });
 
-  it("rejects ids of built-in blocks and anchors that are not unique", () => {
+  it("rejects ids of built-in blocks and warns about anchors that are not unique", () => {
     const src = ['//! ---', "//! id: killers", "//! slot: ordering", "//! ---", '// @insert search.rs after "}"', "x();"].join("\n");
     const msgs = errors(src).map((d) => d.message).join("\n");
     expect(msgs).toMatch(/already used by a built-in/);
-    expect(msgs).toMatch(/appears \d+ times/);
+    const warnings = parseBlockFile(src).diagnostics.filter((d) => d.level === "warning").map((d) => d.message).join("\n");
+    expect(warnings).toMatch(/appears \d+ times/);
+  });
+
+  it("reads @replace and @insert before sections and writes them back", () => {
+    const src = [
+      "//! ---",
+      "//! id: my_pvs",
+      "//! slot: move_loop",
+      "//! requires: my_alpha_beta",
+      "//! ---",
+      "",
+      '// @replace search.rs "let a = 1;" to "let c = 3;" #2',
+      "let b = 2;",
+      "",
+      '// @insert search.rs before "x();"',
+      "y();",
+      "",
+      '// @replace search.rs "gone();"',
+    ].join("\n");
+    const { block, diagnostics } = parseBlockFile(src);
+    expect(diagnostics.filter((d) => d.level === "error")).toEqual([]);
+    expect(block!.sections).toEqual([
+      expect.objectContaining({ kind: "replace", file: "search.rs", anchor: "let a = 1;", to: "let c = 3;", nth: 2, body: "let b = 2;" }),
+      expect.objectContaining({ kind: "insert", file: "search.rs", anchor: "x();", before: true, body: "y();" }),
+      expect.objectContaining({ kind: "replace", file: "search.rs", anchor: "gone();", body: "" }),
+    ]);
+    expect(parseBlockFile(serializeBlock(block!)).block!.sections).toEqual(
+      block!.sections.map((s) => expect.objectContaining({ ...s, line: expect.any(Number) })),
+    );
   });
 
   it("round-trips through serializeBlock", () => {

@@ -1,3 +1,4 @@
+// @block transposition_table
 //! Transposition table (the "Transposition table" block).
 
 use cozy_chess::Move;
@@ -198,3 +199,4 @@ mod tests {
     }
 }
 // @end tests
+// @end transposition_table

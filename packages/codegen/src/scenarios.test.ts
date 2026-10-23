@@ -33,7 +33,7 @@ describe("user scenarios", () => {
         files,
         Object.keys(s.edits).map((path) => ({ path, text: viewOf(files.find((f) => f.path === path)!).lines.join("\n") })),
       );
-      expect(again).toEqual({ sources: {}, created: [], forks: [], errors: [] });
+      expect(again).toEqual({ sources: {}, created: [], forks: [], changed: [], errors: [] });
     });
   }
 });

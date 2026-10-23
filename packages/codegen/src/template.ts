@@ -28,7 +28,7 @@ const END = /^\s*\/\/ @end ([\w|]+)\s*$/;
 const HOOK = /^\s*\/\/ @hook \w+\s*$/;
 
 /** Switches set by the generator, never shown as regions. */
-export const isPseudo = (name: string) => name.startsWith("slot_") || name.startsWith("use_");
+export const isPseudo = (name: string) => name.startsWith("slot_") || name.startsWith("use_") || name.startsWith("file_");
 
 export class TemplateError extends Error {}
 

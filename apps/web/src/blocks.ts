@@ -12,7 +12,11 @@ import {
   BASIC_TIME,
   TIME_MANAGEMENT,
   TRANSPOSITION_TABLE,
+  SKELETON_TYPES,
+  isCustomSlot,
+  skeletonSpec,
   type BlockFile,
+  type SkeletonType,
   type EvalTermType,
   type ParamSpec,
   type SearchBlockType,
@@ -27,6 +31,8 @@ export const HCE = "cfs_hce";
 export const TIME = "cfs_time_management";
 export const BASIC_TIME_BLOCK = "cfs_basic_time";
 export const TT = "cfs_transposition_table";
+export const RANDOM = "cfs_random_mover";
+export const TAPER = "cfs_taper";
 
 export const searchType = (t: SearchBlockType) => `cfs_search_${t}`;
 export const evalType = (t: EvalTermType) => `cfs_eval_${t}`;
@@ -158,6 +164,111 @@ function paramBlock(
 
 // Definitions ---------------------------------------------------------------
 
+/** Appends rows to a block definition after the ones it has. */
+function addRows(def: Record<string, unknown>, rows: Row[]): Record<string, unknown> {
+  let n = 0;
+  while (def[`message${n}`] !== undefined) n++;
+  rows.forEach((row, k) => {
+    def[`message${n + k}`] = row.message;
+    def[`args${n + k}`] = row.args;
+  });
+  return def;
+}
+
+const SETTING = { previousStatement: "engine_setting", nextStatement: "engine_setting", colour: COLOURS.setting };
+
+/**
+ * The shape of each skeleton block. Your own version of a skeleton block
+ * gets the same shape with its own title and parameters.
+ */
+export function skeletonDef(base: SkeletonType, type: string, title: string, params: ParamSpec[]): Record<string, unknown> {
+  switch (base) {
+    case "engine":
+      return addRows(
+        {
+          type,
+          message0: `${title} %1 by %2`,
+          args0: [
+            { type: "field_input", name: "NAME", text: "My Engine" },
+            { type: "field_input", name: "AUTHOR", text: "me" },
+          ],
+          message1: "bench depth %1",
+          args1: [
+            { type: "field_number", name: "BENCH_DEPTH", value: DEFAULT_BENCH_DEPTH, min: 1, max: MAX_BENCH_DEPTH, precision: 1 },
+          ],
+          colour: COLOURS.engine,
+          tooltip: "The root of your engine. Plug a search and an evaluation into it.",
+        },
+        [
+          ...params.flatMap(paramRows),
+          { message: "settings %1", args: [{ type: "input_statement", name: "SETTINGS", check: "engine_setting" }] },
+          { message: "search %1", args: [{ type: "input_statement", name: "SEARCH", check: "search_skeleton" }] },
+          { message: "evaluation %1", args: [{ type: "input_statement", name: "EVAL", check: "eval_skeleton" }] },
+        ],
+      );
+    case "negamax":
+      return addRows(
+        paramBlock(type, title, params, {
+          previousStatement: "search_skeleton",
+          colour: COLOURS.skeleton,
+          tooltip: "Negamax: a fixed-depth search on its own. Drop search blocks into its slots.",
+        }),
+        (Object.keys(SLOT_INPUT) as SearchSlot[]).map((slot) => ({
+          message: `${SLOT_LABEL[slot]} %1`,
+          args: [{ type: "input_statement", name: SLOT_INPUT[slot], check: `slot_${slot}` }],
+        })),
+      );
+    case "random_mover":
+      return paramBlock(type, title, params, {
+        previousStatement: "search_skeleton",
+        colour: COLOURS.skeleton,
+        tooltip: "Plays a random legal move. Needs no evaluation.",
+      });
+    case "hce":
+      return addRows(
+        paramBlock(type, title, params, {
+          previousStatement: "eval_skeleton",
+          colour: COLOURS.eval,
+          tooltip: "Adds up the terms below. Without Tapered evaluation the middlegame values are the score.",
+        }),
+        [
+          { message: "blend by phase %1", args: [{ type: "input_statement", name: "TAPER", check: "taper" }] },
+          { message: "terms %1", args: [{ type: "input_statement", name: "TERMS", check: "eval_term" }] },
+        ],
+      );
+    case "taper":
+      return paramBlock(type, title, params, {
+        previousStatement: "taper",
+        colour: COLOURS.evalTerm,
+        tooltip: "Blends middlegame and endgame values by game phase.",
+      });
+    case "transposition_table":
+      return paramBlock(type, title, params, { ...SETTING, tooltip: TRANSPOSITION_TABLE.description });
+    case "basic_time":
+      return paramBlock(type, title, params, { ...SETTING, tooltip: BASIC_TIME.description });
+    case "time_management":
+      return paramBlock(type, title, params, { ...SETTING, tooltip: TIME_MANAGEMENT.description });
+  }
+}
+
+/** The Blockly type of each built-in skeleton block. */
+export const SKELETON_BLOCK: Record<SkeletonType, string> = {
+  engine: "cfs_engine",
+  negamax: "cfs_negamax",
+  random_mover: "cfs_random_mover",
+  hce: "cfs_hce",
+  taper: "cfs_taper",
+  transposition_table: "cfs_transposition_table",
+  basic_time: "cfs_basic_time",
+  time_management: "cfs_time_management",
+};
+
+/** The skeleton type of a built-in Blockly type, if it is one. */
+export function skeletonOf(blockType: string): SkeletonType | null {
+  const hit = Object.entries(SKELETON_BLOCK).find(([, t]) => t === blockType);
+  return hit ? (hit[0] as SkeletonType) : null;
+}
+
 let defined = false;
 
 /** Registers every CFS block type with Blockly (idempotent). */
@@ -165,68 +276,9 @@ export function defineBlocks(): void {
   if (defined) return;
   defined = true;
 
-  const defs: Record<string, unknown>[] = [
-    {
-      type: ENGINE,
-      message0: "Engine %1 by %2",
-      args0: [
-        { type: "field_input", name: "NAME", text: "My Engine" },
-        { type: "field_input", name: "AUTHOR", text: "me" },
-      ],
-      message1: "bench depth %1",
-      args1: [
-        { type: "field_number", name: "BENCH_DEPTH", value: DEFAULT_BENCH_DEPTH, min: 1, max: MAX_BENCH_DEPTH, precision: 1 },
-      ],
-      message2: "settings %1",
-      args2: [{ type: "input_statement", name: "SETTINGS", check: "engine_setting" }],
-      message3: "search %1",
-      args3: [{ type: "input_statement", name: "SEARCH", check: "search_skeleton" }],
-      message4: "evaluation %1",
-      args4: [{ type: "input_statement", name: "EVAL", check: "eval_skeleton" }],
-      colour: COLOURS.engine,
-      tooltip: "The root of your engine. Plug a search and an evaluation into it.",
-    },
-    paramBlock(BASIC_TIME_BLOCK, BASIC_TIME.label, BASIC_TIME.params, {
-      previousStatement: "engine_setting",
-      nextStatement: "engine_setting",
-      colour: COLOURS.setting,
-      tooltip: BASIC_TIME.description,
-    }),
-    paramBlock(TIME, TIME_MANAGEMENT.label, TIME_MANAGEMENT.params, {
-      previousStatement: "engine_setting",
-      nextStatement: "engine_setting",
-      colour: COLOURS.setting,
-      tooltip: TIME_MANAGEMENT.description,
-    }),
-    paramBlock(TT, TRANSPOSITION_TABLE.label, TRANSPOSITION_TABLE.params, {
-      previousStatement: "engine_setting",
-      nextStatement: "engine_setting",
-      colour: COLOURS.setting,
-      tooltip: TRANSPOSITION_TABLE.description,
-    }),
-    {
-      type: NEGAMAX,
-      message0: "Negamax search (iterative deepening)",
-      ...Object.fromEntries(
-        (Object.keys(SLOT_INPUT) as SearchSlot[]).flatMap((slot, i) => [
-          [`message${i + 1}`, `${SLOT_LABEL[slot]} %1`],
-          [`args${i + 1}`, [{ type: "input_statement", name: SLOT_INPUT[slot], check: `slot_${slot}` }]],
-        ]),
-      ),
-      previousStatement: "search_skeleton",
-      colour: COLOURS.skeleton,
-      tooltip: "Alpha-beta negamax with iterative deepening. Drop search blocks into its slots.",
-    },
-    {
-      type: HCE,
-      message0: "Hand-crafted evaluation (tapered)",
-      message1: "terms %1",
-      args1: [{ type: "input_statement", name: "TERMS", check: "eval_term" }],
-      previousStatement: "eval_skeleton",
-      colour: COLOURS.eval,
-      tooltip: "Adds up the terms below, blending middlegame and endgame by game phase.",
-    },
-  ];
+  const defs: Record<string, unknown>[] = SKELETON_TYPES.map((base) =>
+    skeletonDef(base, SKELETON_BLOCK[base], base === "engine" ? "Engine" : skeletonSpec(base)!.label, skeletonSpec(base)!.params),
+  );
 
   for (const [type, spec] of Object.entries(SEARCH_BLOCKS) as [SearchBlockType, (typeof SEARCH_BLOCKS)[SearchBlockType]][]) {
     defs.push(
@@ -259,7 +311,15 @@ export function defineBlocks(): void {
 /** Defines (or redefines) the Blockly type of a custom block. */
 export function defineCustomBlock(b: BlockFile): string {
   const type = customType(b.id);
-  const slot = b.slot === "eval" ? null : b.slot;
+  if (b.base && skeletonSpec(b.base) && !isCustomSlot(b.slot)) {
+    // Your version of a skeleton block: same shape, your title and parameters.
+    const def = skeletonDef(b.base as SkeletonType, type, `✎ ${b.label}`, b.params);
+    def.tooltip = `${b.description || "Your own version."} Right-click > Edit this block to change its code.`;
+    delete Blockly.Blocks[type];
+    Blockly.common.defineBlocksWithJsonArray([def]);
+    return type;
+  }
+  const slot = b.slot === "eval" || !isCustomSlot(b.slot) ? null : b.slot;
   const def = paramBlock(type, `✎ ${b.label}`, b.params, {
     previousStatement: slot ? `slot_${slot}` : "eval_term",
     nextStatement: slot ? `slot_${slot}` : "eval_term",
@@ -274,6 +334,7 @@ export function defineCustomBlock(b: BlockFile): string {
 /** Every CFS block may appear at most once. */
 export function maxInstances(): Record<string, number> {
   const types = [
+    ...Object.values(SKELETON_BLOCK),
     ENGINE,
     NEGAMAX,
     HCE,
@@ -302,7 +363,26 @@ export interface ToolboxCustom {
 export const NEW_BLOCK_BUTTON = "cfsNewBlock";
 export const IMPORT_BLOCK_BUTTON = "cfsImportBlock";
 
-export function toolbox(custom: ToolboxCustom[] = []): Blockly.utils.toolbox.ToolboxDefinition {
+/** Disabled reason of drawer blocks whose requirements are not in the engine yet. */
+export const NEEDS_REASON = "cfs_needs";
+
+/** Marks the drawer blocks in `disabled` as not placeable yet. */
+function markDisabled(items: object[], disabled: ReadonlySet<string>): object[] {
+  return items.map((item) => {
+    const it = item as { kind: string; type?: string; contents?: object[] };
+    if (it.kind === "block" && it.type && disabled.has(it.type)) return { ...it, disabledReasons: [NEEDS_REASON] };
+    if (it.contents) return { ...it, contents: markDisabled(it.contents, disabled) };
+    return it;
+  });
+}
+
+/** The drawer. Blocks in `disabled` are greyed out: they need another block first. */
+export function toolbox(custom: ToolboxCustom[] = [], disabled: ReadonlySet<string> = new Set()): Blockly.utils.toolbox.ToolboxDefinition {
+  const def = catalogue(custom) as { kind: string; contents: object[] };
+  return { ...def, contents: markDisabled(def.contents, disabled) } as Blockly.utils.toolbox.ToolboxDefinition;
+}
+
+function catalogue(custom: ToolboxCustom[]): Blockly.utils.toolbox.ToolboxDefinition {
   const category = (name: string, colour: string, contents: object[]) => ({
     kind: "category",
     name,
@@ -318,13 +398,18 @@ export function toolbox(custom: ToolboxCustom[] = []): Blockly.utils.toolbox.Too
         { kind: "block", type: TIME },
         { kind: "block", type: TT },
       ]),
-      category("Search", COLOURS.skeleton, [{ kind: "block", type: NEGAMAX }, ...blocksIn("root")]),
+      category("Search", COLOURS.skeleton, [
+        { kind: "block", type: RANDOM },
+        { kind: "block", type: NEGAMAX },
+        ...blocksIn("root"),
+      ]),
       category("Pruning", COLOURS.pruning, blocksIn("pruning")),
       category("Move ordering", COLOURS.ordering, blocksIn("ordering")),
       category("Move loop", COLOURS.move_loop, [...blocksIn("move_loop"), ...blocksIn("reductions")]),
       category("Leaf", COLOURS.leaf, blocksIn("leaf")),
       category("Evaluation", COLOURS.eval, [
         { kind: "block", type: HCE },
+        { kind: "block", type: TAPER },
         ...(Object.keys(EVAL_TERMS) as EvalTermType[]).map((t) => ({ kind: "block", type: evalType(t) })),
       ]),
       category("My blocks", "#5c5c5c", [

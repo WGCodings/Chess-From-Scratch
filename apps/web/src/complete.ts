@@ -5,6 +5,7 @@
  */
 
 import type { Completion, CompletionContext, CompletionResult, CompletionSource } from "@codemirror/autocomplete";
+import type { EditorView } from "@codemirror/view";
 import { SKELETON_VALUES, TEMPLATES } from "@cfs/codegen";
 import { COZY_API, type ApiItem } from "./cozy-api.generated";
 
@@ -129,6 +130,15 @@ function clean(t: string, self: string): string {
   return box ? box[1]! : s;
 }
 
+/** Inserts `name()`, with the cursor between the brackets when the call takes arguments. */
+const callApply =
+  (name: string, noArgs: boolean) =>
+  (view: EditorView, _c: Completion, from: number, to: number) => {
+    const text = `${name}()`;
+    const cursor = from + text.length - (noArgs ? 0 : 1);
+    view.dispatch({ changes: { from, to, insert: text }, selection: { anchor: cursor }, userEvent: "input.complete" });
+  };
+
 const option = (i: ApiItem, type: string): Completion => {
   const call = i.kind === "method" || i.kind === "assoc" || i.kind === "function";
   const noArgs = /\(\s*(&\s*(mut\s+)?self\s*)?\)/.test(i.sig);
@@ -137,7 +147,7 @@ const option = (i: ApiItem, type: string): Completion => {
     type: i.kind === "field" ? "property" : i.kind === "variant" || i.kind === "const" ? "constant" : call ? (i.kind === "method" ? "method" : "function") : "variable",
     detail: i.kind === "field" ? `: ${i.sig}` : i.kind === "variant" ? type : i.sig.replace(/^fn \w+/, ""),
     info: i.doc || undefined,
-    apply: call && noArgs ? `${i.name}()` : undefined,
+    apply: call && i.name !== "S" ? callApply(i.name, noArgs) : call ? callApply(i.name, false) : undefined,
     boost: i.kind === "variant" ? 1 : 0,
   };
 };
@@ -164,11 +174,12 @@ export function cfsCompletions(params: () => { name: string; type: string }[]): 
       return { from: ctx.pos - member[2]!.length, options: items.map((i) => option(i, type!)), validFor: /^\w*$/ };
     }
 
-    const word = ctx.matchBefore(/[A-Za-z_]\w*/);
+    // Ctrl+Space with nothing typed yet lists everything.
+    const word = ctx.matchBefore(/[A-Za-z_]\w*/) ?? (ctx.explicit ? { from: ctx.pos, to: ctx.pos } : null);
     if (!word || (word.from === word.to && !ctx.explicit)) return null;
     const options: Completion[] = [
-      ...Object.entries(VARIABLES).map(([name, v]) => ({ label: name, type: "variable", detail: v.type, info: v.doc })),
-      { label: "self", type: "variable", detail: "Searcher", info: "The searcher: its fields and helper tables." },
+      ...Object.entries(VARIABLES).map(([name, v]) => ({ label: name, type: "variable", detail: v.type, info: v.doc, boost: 3 })),
+      { label: "self", type: "variable", detail: "Searcher", info: "The searcher: its fields and helper tables.", boost: 3 },
       ...params().map((p) => ({ label: p.name, type: "constant", detail: p.type, info: "Parameter (params.rs)", boost: 2 })),
       ...FUNCTIONS.map((f) => option(f, "")),
       ...Object.keys(TYPES).filter((t) => t && /^[A-Z]/.test(t)).map((t) => ({ label: t, type: "class" })),
@@ -177,4 +188,76 @@ export function cfsCompletions(params: () => { name: string; type: string }[]): 
     ];
     return { from: word.from, options, validFor: /^\w*$/ };
   };
+}
+
+/** The parameters of a signature like `fn f(&self, a: A, b: B) -> R`, without `self`. */
+export function paramsOf(sig: string): string[] {
+  const open = sig.indexOf("(");
+  if (open < 0) return [];
+  let depth = 0;
+  let cur = "";
+  const out: string[] = [];
+  for (let k = open + 1; k < sig.length; k++) {
+    const c = sig[k]!;
+    if (c === "(" || c === "<" || c === "[") depth++;
+    if ((c === ")" || c === ">" || c === "]") && depth-- === 0) {
+      out.push(cur);
+      break;
+    }
+    if (c === "," && depth === 0) {
+      out.push(cur);
+      cur = "";
+    } else cur += c;
+  }
+  return out.map((x) => x.trim()).filter((x) => x && !/^&?\s*(mut\s+)?self$/.test(x) && !/^&'\w+\s+(mut\s+)?self$/.test(x));
+}
+
+export interface Signature {
+  name: string;
+  params: string[];
+  /** The parameter the cursor is in. */
+  active: number;
+  ret?: string;
+  doc?: string;
+}
+
+/**
+ * The call the cursor is inside, from the text before the cursor: which
+ * function or method, its parameters and which one is being typed.
+ */
+export function signatureAt(before: string): Signature | null {
+  // The innermost bracket that is still open.
+  let depth = 0;
+  let commas = 0;
+  let open = -1;
+  for (let k = before.length - 1; k >= 0; k--) {
+    const c = before[k]!;
+    if (c === ")" || c === "]" || c === "}") depth++;
+    else if (c === "(" || c === "[" || c === "{") {
+      if (depth === 0) {
+        if (c !== "(") return null;
+        open = k;
+        break;
+      }
+      depth--;
+    } else if (c === "," && depth === 0) commas++;
+    else if (c === ";" && depth === 0) return null;
+  }
+  if (open < 0) return null;
+  const head = before.slice(0, open);
+  let item: ApiItem | undefined;
+  const method = /((?:[A-Za-z_]\w*(?:\([^()]*\))?\.)*[A-Za-z_]\w*(?:\([^()]*\))?)\.(\w+)\s*$/.exec(head);
+  const path = /([A-Za-z_]\w*)::(\w+)\s*$/.exec(head);
+  const free = /(?:^|[^\w.:])([A-Za-z_]\w*)\s*$/.exec(head);
+  if (method) {
+    const type = typeOf(method[1]!);
+    item = type ? TYPES[type]?.find((i) => i.name === method[2] && i.kind !== "field") : undefined;
+  } else if (path) {
+    item = TYPES[path[1]!]?.find((i) => i.name === path[2]);
+  } else if (free) {
+    item = FUNCTIONS.find((f) => f.name === free[1]);
+  }
+  if (!item) return null;
+  const params = paramsOf(item.sig);
+  return { name: item.name, params, active: Math.min(commas, Math.max(params.length - 1, 0)), ret: item.ret ?? /->\s*(.+)$/.exec(item.sig)?.[1], doc: item.doc || undefined };
 }

@@ -1,4 +1,10 @@
+// @block engine
 //! `go` command limits and a simple soft/hard time manager.
+
+// @block random_mover
+// The random mover answers at once and never looks at the clock.
+#![allow(dead_code)]
+// @end random_mover
 
 use std::time::{Duration, Instant};
 
@@ -49,6 +55,11 @@ impl Limits {
 #[derive(Clone, Debug)]
 pub struct TimeManager {
     start: Instant,
+    // @block iterative_deepening
+    // @else
+    // Only iterative deepening reads the soft limit.
+    #[allow(dead_code)]
+    // @end iterative_deepening
     soft: Option<Duration>,
     hard: Option<Duration>,
     max_nodes: Option<u64>,
@@ -127,10 +138,12 @@ impl TimeManager {
         self.start.elapsed()
     }
 
+    // @block iterative_deepening
     /// Checked between iterations: is it worth starting another one?
     pub fn soft_stop(&self, nodes: u64) -> bool {
         self.soft.is_some_and(|s| self.elapsed() >= s) || self.max_nodes.is_some_and(|n| nodes >= n)
     }
+    // @end iterative_deepening
 
     /// Checked inside the search: must we abort right now?
     pub fn hard_stop(&self, nodes: u64) -> bool {
@@ -162,3 +175,4 @@ mod tests {
     }
 }
 // @end tests
+// @end engine

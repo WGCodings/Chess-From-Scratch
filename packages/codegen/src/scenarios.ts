@@ -8,7 +8,7 @@
  * come out.
  */
 
-import { EVAL_TERMS, SEARCH_BLOCKS, defaultParams, evalSpec, searchSpec } from "./blocks";
+import { EVAL_TERMS, SEARCH_BLOCKS, SKELETON_TYPES, defaultParams, evalSpec, searchSpec } from "./blocks";
 import { EXAMPLE_BLOCKS, HOOKS, forkBlock, newBlockSource, type CustomSlot } from "./blockfile";
 import { codeToBlocks, viewOf, type CodeResult } from "./fromcode";
 import { generateProject } from "./generate";
@@ -24,6 +24,8 @@ export interface Scenario {
   blocks?: [string, CustomSlot, string][];
   /** Ids taken in My blocks. */
   taken?: string[];
+  /** Save changes inside existing blocks as this new block on top of them. */
+  onTop?: { id: string; label: string };
   /** Expected errors (regexes, in order); none = must succeed. */
   errors?: RegExp[];
   /** Checks on the result. */
@@ -112,9 +114,9 @@ export function scenarios(): Scenario[] {
   list.push({
     name: "code: insert after a unique skeleton line",
     start: bareAb,
-    edits: { "src/search.rs": after("// Repetitions and the fifty-move rule are draws.", block("my_insert", "        ", ["let _ = ply;"])) },
+    edits: { "src/search.rs": after("// Count the node and stop when time is up (the result is then thrown away).", block("my_insert", "        ", ["let _ = ply;"])) },
     expect: (r) => {
-      if (!r.sources.my_insert!.includes('// @insert search.rs after "// Repetitions and the fifty-move rule are draws."')) throw new Error(r.sources.my_insert);
+      if (!r.sources.my_insert!.includes('// @insert search.rs after "// Count the node and stop when time is up (the result is then thrown away)."')) throw new Error(r.sources.my_insert);
     },
   });
   list.push({
@@ -167,6 +169,25 @@ export function scenarios(): Scenario[] {
     edits: { "src/search.rs": after("// @end check_extension", block("second_ext", "            ", ["if i > 1000 {", "    extension += 1;", "}"])) },
     expect: (r) => {
       if (!r.sources.second_ext!.includes("// @hook extensions")) throw new Error(r.sources.second_ext);
+    },
+  });
+
+  list.push({
+    name: "code: a comment line right above a new block goes into the block",
+    start: bareAb,
+    edits: {
+      "src/search.rs": after("// @hook reductions", [
+        "            // late moves one ply less",
+        "",
+        "            // @block tester",
+        "            if i >= 30 && quiet {",
+        "                extension -= 1;",
+        "            }",
+        "            // @end tester",
+      ]),
+    },
+    expect: (r) => {
+      if (!r.sources.tester!.includes("// @hook reductions\n// late moves one ply less\nif i >= 30")) throw new Error(r.sources.tester);
     },
   });
 
@@ -262,6 +283,103 @@ export function scenarios(): Scenario[] {
     ]),
   });
 
+  list.push({
+    name: "code: changing the search skeleton makes your own Negamax",
+    start: bareAb,
+    edits: { "src/search.rs": replace("self.pv.clear(ply);", "self.pv.clear(ply); // fresh line") },
+    expect: (r) => {
+      if (r.forks[0]?.base !== "negamax" || !r.sources.my_negamax!.includes("// fresh line")) throw new Error(JSON.stringify(r.forks));
+    },
+  });
+  list.push({
+    name: "code: changing PHASE_MAX makes your own Tapered evaluation",
+    start: () => {
+      const ws = bareAb();
+      ws.eval.taper = true;
+      return ws;
+    },
+    edits: { "src/eval.rs": replace("pub const PHASE_MAX: i32 = 24;", "pub const PHASE_MAX: i32 = 24; // the classic value") },
+    expect: (r) => {
+      if (r.forks[0]?.base !== "taper") throw new Error(JSON.stringify(r.forks));
+    },
+  });
+  list.push({
+    name: "code: editing the empty piece-square tables makes your own version",
+    start: () => {
+      const ws = bareAb();
+      ws.eval.terms.push({ type: "psqt", params: {} });
+      return ws;
+    },
+    edits: {
+      "src/psqt.rs": (lines) => {
+        const k = lineOf(lines, "pub const KNIGHT_PSQT: [S; 64] = [");
+        lines[k + 4] = "    S(0, 0), S(0, 0), S(0, 0), S(20, 10), S(20, 10), S(0, 0), S(0, 0), S(0, 0),";
+      },
+    },
+    expect: (r) => {
+      if (r.forks[0]?.base !== "psqt" || !r.sources.my_psqt!.includes("S(20, 10)")) throw new Error(JSON.stringify(r.forks));
+    },
+  });
+  list.push({
+    name: "code: a new block inside your own Negamax",
+    start: () => {
+      const ws = bareAb();
+      ws.customBlocks = { my_negamax: forkBlock("negamax", "my_negamax") };
+      ws.versions = { negamax: "my_negamax" };
+      return ws;
+    },
+    edits: { "src/search.rs": after("self.pv.clear(ply);", block("inside_mine", "        ", ["let _ = ply;"])) },
+    expect: (r) => {
+      if (!r.sources.inside_mine?.includes('// @insert search.rs after "self.pv.clear(ply);"')) throw new Error(JSON.stringify(r));
+    },
+  });
+
+  // --- New blocks on top of others -------------------------------------------------------------
+  const requiresIn = (r: CodeResult, id: string, need: string) => {
+    const src = r.sources[id];
+    if (!src?.includes(`//! requires: ${need}`) || !r.created.some((c) => c.id === id)) throw new Error(JSON.stringify(r));
+  };
+  list.push({
+    name: "code: a change inside Alpha-beta saved as a new block on top",
+    start: bareAb,
+    onTop: { id: "ab_floor", label: "Alpha-beta floor" },
+    edits: {
+      "src/search.rs": replace(
+        "let score = -self.negamax(pos, new_depth, ply + 1, -beta, -alpha);",
+        "let score = -self.negamax(pos, new_depth.max(0), ply + 1, -beta, -alpha);",
+      ),
+    },
+    expect: (r) => {
+      requiresIn(r, "ab_floor", "alpha_beta");
+      if (r.forks.length || !r.sources.ab_floor!.includes("// @replace search.rs")) throw new Error(JSON.stringify(r));
+    },
+  });
+  list.push({
+    name: "code: lines added inside your block saved as a new block on top",
+    start: () => {
+      const ws = bareAb();
+      ws.search.slots.extensions.push({ type: "check_extension", params: {} });
+      ws.customBlocks = { check_extension: EXAMPLE_BLOCKS.check_extension! };
+      return ws;
+    },
+    onTop: { id: "check_ext_cap", label: "Check extension cap" },
+    edits: { "src/search.rs": after("extension += CHECK_EXTENSION;", ["                extension = extension.min(MY_EXT_CAP);"]) },
+    expect: (r) => {
+      requiresIn(r, "check_ext_cap", "check_extension");
+      if (r.sources.check_extension || !r.sources.check_ext_cap!.includes("MY_EXT_CAP: i32 = 1")) throw new Error(JSON.stringify(r));
+    },
+  });
+  list.push({
+    name: "code: a skeleton line changed in a new block on top of Negamax",
+    start: bareAb,
+    onTop: { id: "seldepth_note", label: "Seldepth note" },
+    edits: { "src/search.rs": after("self.pv.clear(ply);", ["        self.seldepth = self.seldepth.max(ply);"]) },
+    expect: (r) => {
+      requiresIn(r, "seldepth_note", "negamax");
+      if (r.forks.length) throw new Error(JSON.stringify(r.forks));
+    },
+  });
+
   // --- Formatting only ------------------------------------------------------------------------
   list.push({
     name: "code: re-indenting the whole file changes nothing",
@@ -274,7 +392,7 @@ export function scenarios(): Scenario[] {
 
   // --- Mistakes the app must explain ----------------------------------------------------------
   const mistakes: [string, Record<string, (l: string[]) => void>, RegExp, string[]?][] = [
-    ["code: changing skeleton code", { "src/search.rs": replace("let in_check = !board.checkers().is_empty();", "let in_check = false;") }, /Skeleton code/],
+    ["code: a comment outside any block", { "src/search.rs": after("// @hook pruning", ["        // just a note"]) }, /comment .* is outside any block/],
     ["code: loose code without markers", { "src/search.rs": after("// @hook pruning", ["        let x = 1;"]) }, /Wrap new code/],
     ["code: a block name with capitals", { "src/search.rs": after("// @hook pruning", block("MyBlock", "        ", ["let _ = 1;"])) }, /lowercase/],
     ["code: a built-in block's name", { "src/search.rs": after("// @hook pruning", block("killers", "        ", ["let _ = 1;"])) }, /built-in block/],
@@ -309,7 +427,7 @@ export function runScenario(s: Scenario): Outcome {
       list[at] = { type: id, params: list[at]!.params };
     } else ws = withBlock(ws, id, slot, src);
   }
-  const empty: CodeResult = { sources: {}, created: [], forks: [], errors: [] };
+  const empty: CodeResult = { sources: {}, created: [], forks: [], changed: [], errors: [] };
   if (!s.edits) return { result: empty, ws };
   const files = generateProject(ws);
   const edits = Object.entries(s.edits).map(([path, fn]) => {
@@ -317,7 +435,7 @@ export function runScenario(s: Scenario): Outcome {
     fn(lines);
     return { path, text: lines.join("\n") };
   });
-  const result = codeToBlocks(ws, files, edits, s.taken ?? []);
+  const result = codeToBlocks(ws, files, edits, s.taken ?? [], s.onTop ? { onTop: s.onTop } : {});
   return { result, ws: result.errors.length ? ws : applyResult(ws, result) };
 }
 
@@ -326,6 +444,10 @@ export function applyResult(ws0: Workspace, r: CodeResult): Workspace {
   const ws = structuredClone(ws0);
   ws.customBlocks = { ...ws.customBlocks, ...r.sources };
   for (const f of r.forks) {
+    if ((SKELETON_TYPES as string[]).includes(f.base)) {
+      ws.versions = { ...ws.versions, [f.base]: f.id };
+      continue;
+    }
     for (const list of [...Object.values(ws.search.slots), ws.eval.terms]) {
       const at = list.findIndex((b) => b.type === f.base);
       if (at >= 0) list[at] = { type: f.id, params: {} };

@@ -1,3 +1,4 @@
+// @block engine
 //! `bench`: searches a fixed set of positions to a fixed depth and prints
 //! the total node count and speed. The node count is the engine's
 //! fingerprint (OpenBench uses it to verify builds), so it must be
@@ -70,3 +71,4 @@ mod tests {
     }
 }
 // @end tests
+// @end engine

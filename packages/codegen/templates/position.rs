@@ -1,3 +1,4 @@
+// @block engine
 //! A board plus the history needed for repetition detection, with
 //! make/unmake so the search can walk the tree without cloning histories.
 
@@ -63,6 +64,7 @@ impl Position {
         // @end null_move_pruning
     }
 
+    // @block negamax
     // @block null_move_pruning
     /// Passes the turn. Returns false (and does nothing) when in check.
     #[inline]
@@ -83,6 +85,7 @@ impl Position {
         debug_assert!(self.stack.len() > 1);
         self.stack.pop();
     }
+    // @end negamax
 
     // @block null_move_pruning
     /// True when the move that led here was a null move.
@@ -92,6 +95,7 @@ impl Position {
     }
     // @end null_move_pruning
 
+    // @block draw_detection|use_is_draw
     /// Fifty-move rule or a repetition of an earlier position.
     pub fn is_draw(&self) -> bool {
         let board = self.board();
@@ -108,6 +112,7 @@ impl Position {
             .take(reachable / 2)
             .any(|e| e.board.hash() == hash)
     }
+    // @end draw_detection|use_is_draw
 }
 
 // @block tests
@@ -143,3 +148,4 @@ mod tests {
     }
 }
 // @end tests
+// @end engine

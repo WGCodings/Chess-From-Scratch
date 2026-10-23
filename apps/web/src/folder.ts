@@ -13,7 +13,10 @@ export interface FolderHost {
   /** The current generated project, or null when it has errors. */
   files(): GeneratedFile[] | null;
   /** Edited source files: apply them; returns error messages (empty = applied). */
-  applyCode(edits: { path: string; text: string }[], base: GeneratedFile[]): { path: string; line: number; message: string }[];
+  applyCode(
+    edits: { path: string; text: string }[],
+    base: GeneratedFile[],
+  ): { path: string; line: number; message: string }[] | Promise<{ path: string; line: number; message: string }[]>;
   /** An edited block file: apply it; returns an error message or null. */
   applyBlockFile(id: string, text: string): string | null;
   status(text: string, level: "ok" | "busy" | "error"): void;
@@ -160,7 +163,7 @@ export class FolderSync {
         }
       }
       if (code.length) {
-        const errs = this.host.applyCode(code, this.base);
+        const errs = await this.host.applyCode(code, this.base);
         if (errs.length) {
           errors.push(...errs);
           for (const c of code) this.rejected.set(c.path, c.text);

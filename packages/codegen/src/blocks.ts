@@ -42,6 +42,8 @@ export const SEARCH_SLOTS: readonly SearchSlot[] = [
 ];
 
 export type SearchBlockType =
+  | "iterative_deepening"
+  | "draw_detection"
   | "alpha_beta"
   | "aspiration_windows"
   | "reverse_futility_pruning"
@@ -54,7 +56,7 @@ export type SearchBlockType =
   | "late_move_reductions"
   | "quiescence";
 
-export type EvalTermType = "pesto" | "mobility" | "bishop_pair" | "rook_files" | "passed_pawns";
+export type EvalTermType = "material" | "psqt" | "pesto" | "mobility" | "bishop_pair" | "rook_files" | "passed_pawns";
 
 interface BlockSpecBase {
   label: string;
@@ -113,6 +115,22 @@ export const TRANSPOSITION_TABLE: BlockSpecBase = {
 };
 
 export const SEARCH_BLOCKS: Record<SearchBlockType, SearchBlockSpec> = {
+  iterative_deepening: {
+    label: "Iterative deepening",
+    description: "Searches depth 1, 2, 3, ... until time runs out, instead of one fixed depth.",
+    info: "Without it, Negamax searches one fixed depth and ignores the clock. Iterative deepening searches depth 1, then 2, then 3, and so on, and keeps the best move of the last finished depth. When the time management says time is up, the engine stops and plays that move, so it never runs out of time and uses the time it has. Shallow searches are cheap, and their results make the deeper ones faster (better move ordering, aspiration windows).",
+    cpw: "https://www.chessprogramming.org/Iterative_Deepening",
+    slot: "root",
+    params: [],
+  },
+  draw_detection: {
+    label: "Draw detection",
+    description: "Scores repetitions and fifty-move-rule positions as draws.",
+    info: "A position that repeats, or fifty moves without a capture or pawn move, is a draw. Without this block the engine doesn't see repetitions: it may repeat moves in a winning position, or walk into a lost one when a repetition would have saved it. The position keeps a history of board hashes to spot repetitions.",
+    cpw: "https://www.chessprogramming.org/Repetitions",
+    slot: "pruning",
+    params: [],
+  },
   alpha_beta: {
     label: "Alpha-beta pruning",
     description: "Stops searching a node's moves as soon as one proves the opponent will avoid it.",
@@ -127,7 +145,7 @@ export const SEARCH_BLOCKS: Record<SearchBlockType, SearchBlockSpec> = {
     slot: "root",
     info: "Instead of searching with the full window (-infinity, +infinity), iterative deepening searches around the previous iteration's score with a small margin. Most of the time the true score lands inside, and the narrow window prunes more. If it falls outside, the window is widened and the depth searched again.",
     cpw: "https://www.chessprogramming.org/Aspiration_Windows",
-    requires: ["alpha_beta"],
+    requires: ["alpha_beta", "iterative_deepening"],
     params: [
       { key: "minDepth", label: "From depth", rust: "ASP_MIN_DEPTH", type: "i32", default: 4, min: 1, max: 64 },
       { key: "delta", label: "Window (cp)", rust: "ASP_DELTA", type: "i32", default: 25, min: 1, max: 500 },
@@ -231,6 +249,26 @@ export const SEARCH_BLOCKS: Record<SearchBlockType, SearchBlockSpec> = {
 };
 
 export const EVAL_TERMS: Record<EvalTermType, EvalTermSpec> = {
+  material: {
+    label: "Material",
+    description: "What each piece is worth: pawn, knight, bishop, rook, queen.",
+    info: "The most important term: count the pieces and add up their values, White minus Black. Classic values are a pawn 100, knight and bishop about 300, rook 500, queen 900 (in centipawns). Each value is a middlegame/endgame pair; without the Tapered evaluation block only the middlegame value counts.",
+    cpw: "https://www.chessprogramming.org/Material",
+    params: [
+      { key: "pawn", label: "Pawn", rust: "PAWN_VALUE", type: "S", default: [100, 100], min: -10000, max: 10000 },
+      { key: "knight", label: "Knight", rust: "KNIGHT_VALUE", type: "S", default: [300, 300], min: -10000, max: 10000 },
+      { key: "bishop", label: "Bishop", rust: "BISHOP_VALUE", type: "S", default: [300, 300], min: -10000, max: 10000 },
+      { key: "rook", label: "Rook", rust: "ROOK_VALUE", type: "S", default: [500, 500], min: -10000, max: 10000 },
+      { key: "queen", label: "Queen", rust: "QUEEN_VALUE", type: "S", default: [900, 900], min: -10000, max: 10000 },
+    ],
+  },
+  psqt: {
+    label: "Piece-square tables",
+    description: "Your own bonus per piece per square, in psqt.rs. They start empty.",
+    info: "A table for each piece type with a middlegame/endgame bonus for every square: knights like the centre, pawns like to advance, the king likes shelter in the middlegame and the centre in the endgame. The tables start at zero, in their own file psqt.rs, laid out like a board seen from White's side. Edit the numbers there (Edit code, or in VS Code with a linked folder): your edits become your own version of this block.",
+    cpw: "https://www.chessprogramming.org/Piece-Square_Tables",
+    params: [],
+  },
   pesto: {
     label: "PeSTO tables",
     description: "Material and piece-square tables for middlegame and endgame.",
@@ -300,6 +338,13 @@ export const TIME_BLOCKS: Record<TimeBlockType, BlockSpecBase> = {
   time_management: TIME_MANAGEMENT,
 };
 
+/** Skeleton blocks: the ones other blocks go into. They can be edited like any block. */
+export type SkeletonType = "engine" | "negamax" | "random_mover" | "hce" | "taper" | "transposition_table" | TimeBlockType;
+
+export const NEGAMAX_PARAMS: ParamSpec[] = [
+  { key: "depth", label: "Depth", rust: "NEGAMAX_DEPTH", type: "i32", default: 4, min: 1, max: 64, doc: "Depth of the fixed-depth search (without iterative deepening)." },
+];
+
 /** Explanations for the skeleton blocks that have no parameters of their own. */
 export const SKELETON_INFO = {
   engine: {
@@ -309,12 +354,22 @@ export const SKELETON_INFO = {
   },
   negamax: {
     label: "Negamax search",
-    info: "Negamax is minimax written from the side to move's point of view: a position's score is minus the best score of the opponent's replies. Alpha-beta pruning skips moves that cannot change the result. Iterative deepening searches depth 1, 2, 3, ... so there is always a best move ready when time runs out.",
+    info: "Negamax is minimax written from the side to move's point of view: a position's score is minus the best score of the opponent's replies. On its own it searches every move to a fixed depth (Depth). Add Iterative deepening to search until time runs out, and Alpha-beta pruning to skip moves that cannot change the result.",
     cpw: "https://www.chessprogramming.org/Negamax",
+  },
+  random_mover: {
+    label: "Random mover",
+    info: "Plays a random legal move. No search, no evaluation: the simplest engine that plays legal chess, and the first opponent every engine should beat.",
+    cpw: "https://www.chessprogramming.org/Engine_Testing",
   },
   hce: {
     label: "Hand-crafted evaluation",
-    info: "Scores a position from rules you choose. Each term gives a middlegame and an endgame value; the two are blended by game phase (tapered evaluation), so a term can matter more in the endgame than in the middlegame.",
+    info: "Scores a position from rules you choose: add terms such as Material. Each term gives a middlegame and an endgame value; without the Tapered evaluation block the middlegame value is the score.",
+    cpw: "https://www.chessprogramming.org/Evaluation",
+  },
+  taper: {
+    label: "Tapered evaluation",
+    info: "Blends the middlegame and endgame values of the terms by game phase: the more pieces are left, the more the middlegame value counts. The phase comes from the pieces on the board (knight and bishop 1, rook 2, queen 4, up to 24); edit the block to change PHASE_WEIGHT and PHASE_MAX.",
     cpw: "https://www.chessprogramming.org/Tapered_Eval",
   },
 } as const;
@@ -335,3 +390,29 @@ export function searchSpec(type: string): SearchBlockSpec | undefined {
 export function evalSpec(type: string): EvalTermSpec | undefined {
   return Object.hasOwn(EVAL_TERMS, type) ? EVAL_TERMS[type as EvalTermType] : undefined;
 }
+
+/** Label, explanation and parameters of a skeleton block. */
+export function skeletonSpec(type: string): { label: string; description: string; info: string; cpw: string; params: ParamSpec[] } | undefined {
+  switch (type) {
+    case "engine":
+      return { ...SKELETON_INFO.engine, description: "The root of your engine: UCI, board, time and bench.", params: [] };
+    case "negamax":
+      return { ...SKELETON_INFO.negamax, description: "Negamax search: fixed depth on its own; drop search blocks into its slots.", params: NEGAMAX_PARAMS };
+    case "random_mover":
+      return { ...SKELETON_INFO.random_mover, description: "Plays a random legal move.", params: [] };
+    case "hce":
+      return { ...SKELETON_INFO.hce, description: "Adds up the evaluation terms below.", params: [] };
+    case "taper":
+      return { ...SKELETON_INFO.taper, description: "Blends middlegame and endgame values by game phase.", params: [] };
+    case "transposition_table":
+      return TRANSPOSITION_TABLE;
+    case "basic_time":
+      return BASIC_TIME;
+    case "time_management":
+      return TIME_MANAGEMENT;
+    default:
+      return undefined;
+  }
+}
+
+export const SKELETON_TYPES: SkeletonType[] = ["engine", "negamax", "random_mover", "hce", "taper", "transposition_table", "basic_time", "time_management"];

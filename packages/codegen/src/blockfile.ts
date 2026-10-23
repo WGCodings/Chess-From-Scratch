@@ -27,13 +27,17 @@
  * responsibility: we check the file's structure, not whether it compiles.
  */
 
+import { collapseBuiltins } from "./builtin";
 import {
   EVAL_TERMS,
   SEARCH_BLOCKS,
   SEARCH_SLOTS,
+  SKELETON_TYPES,
   evalSpec,
   searchSpec,
+  skeletonSpec,
   type ParamSpec,
+  type SkeletonType,
   type ParamValue,
   type RustType,
   type Score,
@@ -49,10 +53,32 @@ export type CustomSlot = SearchSlot | "eval";
 
 export const CUSTOM_SLOTS: readonly CustomSlot[] = [...SEARCH_SLOTS, "eval"];
 
+/** Where your version of a skeleton block goes: in place of that skeleton block. */
+export type SkeletonSlot = "engine" | "search" | "evaluation" | "taper" | "setting";
+
+export const SKELETON_SLOT: Record<SkeletonType, SkeletonSlot> = {
+  engine: "engine",
+  negamax: "search",
+  random_mover: "search",
+  hce: "evaluation",
+  taper: "taper",
+  transposition_table: "setting",
+  basic_time: "setting",
+  time_management: "setting",
+};
+
+/** The slot of any block file: a search slot, eval, or a skeleton block's place. */
+export type BlockSlot = CustomSlot | SkeletonSlot;
+
+const SKELETON_SLOTS: readonly SkeletonSlot[] = ["engine", "search", "evaluation", "taper", "setting"];
+
+export const isCustomSlot = (slot: BlockSlot): slot is CustomSlot => (CUSTOM_SLOTS as readonly string[]).includes(slot);
+
 export type Section =
   | { kind: "region"; file: string; index: number; body: string; line: number }
   | { kind: "hook"; hook: string; body: string; line: number }
-  | { kind: "insert"; file: string; anchor: string; nth?: number; body: string; line: number }
+  | { kind: "insert"; file: string; anchor: string; nth?: number; before?: boolean; body: string; line: number }
+  | { kind: "replace"; file: string; anchor: string; to?: string; nth?: number; body: string; line: number }
   | { kind: "file"; path: string; body: string; line: number };
 
 type DistOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -61,7 +87,7 @@ type SectionHead = DistOmit<Section, "body">;
 export interface BlockFile {
   id: string;
   label: string;
-  slot: CustomSlot;
+  slot: BlockSlot;
   /** The built-in block this one is a version of (forks only). */
   base?: string;
   requires: string[];
@@ -155,12 +181,13 @@ export const SKELETON_VALUES: Record<string, string> = {
   tt_move: "use_tt_move",
   is_capture: "use_is_capture",
   is_quiet: "use_quiet",
+  is_draw: "use_is_draw",
 };
 
 const RUST_TYPES: readonly RustType[] = ["i32", "u64", "usize", "f64", "S", "[S; 4]", "[S; 8]"];
 
 /** Files a block may write into besides the templates. */
-export const GENERATED_RS = ["main.rs", "params.rs"];
+export const GENERATED_RS = ["params.rs"];
 
 /** The region name a built-in block uses in the templates. */
 export function regionOf(type: string): string {
@@ -291,7 +318,7 @@ const PARAM = /^([A-Za-z_]\w*)\s*:\s*(\[S;\s*\d+\]|\w+)\s*=\s*(.+?)(?:\s*\(\s*(-
 
 const HEADER_LINE = /^\/\/!\s?(.*)$/;
 /** Section lines start at the beginning of a line; indented ones are code (e.g. a hook inside a fork). */
-const SECTION = /^\/\/ @(region|hook|insert|file)\b\s*(.*?)\s*$/;
+const SECTION = /^\/\/ @(region|hook|insert|replace|file)\b\s*(.*?)\s*$/;
 
 /** Parses a block file. `block` is null when the file cannot be understood at all. */
 export function parseBlockFile(source: string): { block: BlockFile | null; diagnostics: Diagnostic[] } {
@@ -361,8 +388,8 @@ export function parseBlockFile(source: string): { block: BlockFile | null; diagn
   }
   const label = field("label") || id;
   const slotText = field("slot");
-  const slot = slotText as CustomSlot;
-  if (!CUSTOM_SLOTS.includes(slot)) {
+  const slot = slotText as BlockSlot;
+  if (!isCustomSlot(slot) && !(SKELETON_SLOTS as readonly string[]).includes(slot)) {
     error(lineOf("slot"), `The slot must be one of: ${CUSTOM_SLOTS.join(", ")}.`);
   }
   const base = field("base") || undefined;
@@ -432,9 +459,28 @@ export function parseBlockFile(source: string): { block: BlockFile | null; diagn
       if (!/^\w+$/.test(rest!)) error(n, "Write `// @hook <name>`, for example `// @hook pruning`.");
       else current.head = { kind: "hook", hook: HOOK_ALIASES[rest!] ?? rest!, line: n };
     } else if (kind === "insert") {
-      const r = /^(\S+)\s+after\s+"(.*)"(?:\s+#(\d+))?$/.exec(rest!);
-      if (!r) error(n, 'Write `// @insert <file> after "<exact line>"`, optionally followed by `#2` for its 2nd occurrence.');
-      else current.head = { kind: "insert", file: r[1]!, anchor: r[2]!, ...(r[3] ? { nth: Number(r[3]) } : {}), line: n };
+      const r = /^(\S+)\s+(after|before)\s+"(.*)"(?:\s+#(\d+))?$/.exec(rest!);
+      if (!r) error(n, 'Write `// @insert <file> after "<exact line>"` (or `before`), optionally followed by `#2` for its 2nd occurrence.');
+      else {
+        current.head = {
+          kind: "insert",
+          file: r[1]!,
+          anchor: r[3]!,
+          ...(r[2] === "before" ? { before: true } : {}),
+          ...(r[4] ? { nth: Number(r[4]) } : {}),
+          line: n,
+        };
+      }
+    } else if (kind === "replace") {
+      const span = /^(\S+)\s+"(.*)"\s+to\s+"(.*)"(?:\s+#(\d+))?$/.exec(rest!);
+      const one = span ? null : /^(\S+)\s+"(.*)"(?:\s+#(\d+))?$/.exec(rest!);
+      if (span) {
+        current.head = { kind: "replace", file: span[1]!, anchor: span[2]!, to: span[3]!, ...(span[4] ? { nth: Number(span[4]) } : {}), line: n };
+      } else if (one) {
+        current.head = { kind: "replace", file: one[1]!, anchor: one[2]!, ...(one[3] ? { nth: Number(one[3]) } : {}), line: n };
+      } else {
+        error(n, 'Write `// @replace <file> "<exact line>"`, or `// @replace <file> "<first line>" to "<last line>"` for several lines; add `#2` for the 2nd occurrence.');
+      }
     } else {
       if (!rest) error(n, "Write `// @file <path>`, for example `// @file src/see.rs`.");
       else current.head = { kind: "file", path: rest, line: n };
@@ -471,9 +517,15 @@ function checkBlock(b: BlockFile, d: Diagnostic[], lineOf: (k: string) => number
   if (b.base) {
     const s = searchSpec(b.base);
     const e = evalSpec(b.base);
-    if (!s && !e) error(lineOf("base"), `Unknown base block "${b.base}".`);
+    const k = skeletonSpec(b.base);
+    if (!s && !e && !k) error(lineOf("base"), `Unknown base block "${b.base}".`);
     else if (s && s.slot !== b.slot) error(lineOf("slot"), `A version of ${s.label} goes in the ${s.slot} slot.`);
     else if (e && b.slot !== "eval") error(lineOf("slot"), `A version of ${e.label} goes in the eval slot.`);
+    else if (k && b.slot !== SKELETON_SLOT[b.base as SkeletonType]) {
+      error(lineOf("slot"), `A version of ${k.label} has slot ${SKELETON_SLOT[b.base as SkeletonType]}.`);
+    }
+  } else if (!isCustomSlot(b.slot)) {
+    error(lineOf("slot"), `Slot ${b.slot} is only for your version of a skeleton block (with a \`base\`).`);
   }
   for (const r of b.requires) {
     if (r !== "transposition_table" && !searchSpec(r) && !/^[a-z][a-z0-9_]*$/.test(r)) {
@@ -516,18 +568,31 @@ function checkBlock(b: BlockFile, d: Diagnostic[], lineOf: (k: string) => number
       case "hook":
         if (!HOOKS[s.hook]) error(s.line, `Unknown hook "${s.hook}". Hooks: ${Object.keys(HOOKS).join(", ")}.`);
         break;
-      case "insert": {
+      case "insert":
+      case "replace": {
+        const what = s.kind === "replace" ? "The line to replace" : `The line to insert ${s.before ? "before" : "after"}`;
+        if (s.anchor.trim() === "" || (s.kind === "replace" && s.to !== undefined && s.to.trim() === "")) error(s.line, `${what} is empty.`);
+        // Lines of your own blocks are only known in an engine; those anchors are checked there.
+        if (b.requires.some((r) => !isBuiltinName(r))) {
+          if (!files.has(s.file)) error(s.line, `Unknown file "${s.file}". Files: ${[...files].join(", ")}.`);
+          break;
+        }
+        if (s.kind === "replace" && !files.has(s.file)) {
+          error(s.line, `Unknown file "${s.file}". Files: ${[...files].join(", ")}.`);
+          break;
+        }
         if (files.has(s.file)) {
           const src = TEMPLATES[s.file.slice(0, -3) as keyof typeof TEMPLATES];
           const hits = src.split("\n").filter((l) => l.trim() === s.anchor.trim()).length;
           if (hits === 0) error(s.line, `"${s.anchor}" is not a line of ${s.file}.`);
           else if (s.nth !== undefined && (s.nth < 1 || s.nth > hits)) {
             error(s.line, `"${s.anchor}" appears ${hits} time${hits > 1 ? "s" : ""} in ${s.file}; #${s.nth} does not exist.`);
-          } else if (hits > 1 && s.nth === undefined) error(s.line, `"${s.anchor}" appears ${hits} times in ${s.file}; add #1 to #${hits} after the quotes to pick one, or pick a line that appears once.`);
+          } else if (hits > 1 && s.nth === undefined) {
+            warn(s.line, `"${s.anchor}" appears ${hits} times in ${s.file}; the first one generated in your engine is used. Add #2, #3, ... after the quotes to pick another.`);
+          }
         } else if (!GENERATED_RS.includes(s.file) && s.file !== "Cargo.toml") {
           error(s.line, `Unknown file "${s.file}".`);
         }
-        if (s.anchor.trim() === "") error(s.line, "The line to insert after is empty.");
         break;
       }
       case "file": {
@@ -570,6 +635,11 @@ function originalProblem(base: string, file: string, index: number): string | nu
   return bracketProblem(src.split("\n").slice(r.start + 1, r.else ?? r.end).join("\n"));
 }
 
+/** Requirements that are built-in blocks or skeleton parts, not blocks of your own. */
+function isBuiltinName(r: string): boolean {
+  return r === "transposition_table" || !!searchSpec(r) || !!evalSpec(r) || !!skeletonSpec(r);
+}
+
 /** Names the generator uses itself. */
 function reservedId(id: string): boolean {
   return (
@@ -589,8 +659,24 @@ function reservedId(id: string): boolean {
 export function escapeBody(body: string): string {
   return body
     .split("\n")
-    .map((l) => (/^\/\/ @(region|hook|insert|file)\b/.test(l) ? ` ${l}` : l))
+    .map((l) => (/^\/\/ @(region|hook|insert|replace|file)\b/.test(l) ? ` ${l}` : l))
     .join("\n");
+}
+
+/** The line that starts a section in a block file. */
+export function sectionHead(s: DistOmit<Section, "body">): string {
+  switch (s.kind) {
+    case "region":
+      return `// @region ${s.file} ${s.index}`;
+    case "hook":
+      return `// @hook ${s.hook}`;
+    case "insert":
+      return `// @insert ${s.file} ${s.before ? "before" : "after"} "${s.anchor}"${s.nth ? ` #${s.nth}` : ""}`;
+    case "replace":
+      return `// @replace ${s.file} "${s.anchor}"${s.to !== undefined ? ` to "${s.to}"` : ""}${s.nth ? ` #${s.nth}` : ""}`;
+    case "file":
+      return `// @file ${s.path}`;
+  }
 }
 
 /** Turns a block back into its file text. */
@@ -609,14 +695,7 @@ export function serializeBlock(b: BlockFile, intro?: string): string {
     "//! ---",
   ];
   const body = b.sections.map((s) => {
-    const line =
-      s.kind === "region"
-        ? `// @region ${s.file} ${s.index}`
-        : s.kind === "hook"
-          ? `// @hook ${s.hook}`
-          : s.kind === "insert"
-            ? `// @insert ${s.file} after "${s.anchor}"${s.nth ? ` #${s.nth}` : ""}`
-            : `// @file ${s.path}`;
+    const line = sectionHead(s);
     return s.body ? `${line}\n${escapeBody(s.body)}` : line;
   });
   return [...head, "", ...(intro ? [intro, ""] : []), body.join("\n\n"), ""].join("\n");
@@ -636,28 +715,34 @@ export function freeId(wanted: string, taken: Iterable<string>): string {
  * A fork of a built-in block: the same parameters and every region of its
  * code, ready to edit. Unedited, it generates exactly the same engine.
  */
-export function forkBlock(base: string, id: string, label?: string): string {
+/**
+ * Your own version of a built-in block, with its code copied from the
+ * templates. With `enabled` (the regions on in your engine), the code of
+ * other blocks that are not in your engine becomes `// @builtin` lines.
+ */
+export function forkBlock(base: string, id: string, label?: string, enabled?: ReadonlySet<string>): string {
   const s = searchSpec(base);
   const e = evalSpec(base);
-  const spec = s ?? e;
+  const spec = s ?? e ?? skeletonSpec(base);
   if (!spec) throw new Error(`Unknown block ${base}`);
   const region = regionOf(base);
   const sections: Section[] = [];
   // The block's main code first: search.rs or eval.rs, then the supporting files.
-  const order = (n: string) => (n === "search" || n === "eval" ? 0 : 1);
+  const order = (n: string) => (n === "search" || n === "eval" || n === "random" ? 0 : 1);
   const names = (Object.keys(TEMPLATES) as (keyof typeof TEMPLATES)[]).sort((a, b) => order(a) - order(b));
   for (const name of names) {
     const src = TEMPLATES[name];
     const lines = src.split("\n");
     findRegions(src, region).forEach((r, k) => {
-      const body = dedent(lines.slice(r.start + 1, r.else ?? r.end)).join("\n");
+      const raw = lines.slice(r.start + 1, r.else ?? r.end);
+      const body = dedent(enabled ? collapseBuiltins(raw, enabled) : raw).join("\n");
       sections.push({ kind: "region", file: `${name}.rs`, index: k + 1, body, line: 0 });
     });
   }
   const block: BlockFile = {
     id,
     label: label ?? `My ${spec.label.charAt(0).toLowerCase()}${spec.label.slice(1)}`,
-    slot: s ? s.slot : "eval",
+    slot: s ? s.slot : e ? "eval" : SKELETON_SLOT[base as SkeletonType],
     base,
     requires: [...(s?.requires ?? [])],
     description: spec.description,
@@ -670,6 +755,12 @@ export function forkBlock(base: string, id: string, label?: string): string {
     `// Your own version of ${spec.label}. Each @region section replaces one piece of the`,
     "// original code; change conditions, add parameters in the header and use them by name.",
     "// Lines like `// @block x` inside a region belong to other blocks; leave them in place.",
+    ...(enabled
+      ? [
+          "// A line `// @builtin x` stands for the code of block x, added there when x is in your engine;",
+          "// code between `// @until x` and `// @end x` runs until x is in your engine.",
+        ]
+      : []),
   ].join("\n");
   return serializeBlock(block, intro);
 }
@@ -780,4 +871,4 @@ export function newBlockSource(id: string, label: string, slot: CustomSlot): str
 }
 
 /** Which built-in blocks could be forked, by region name (for the web editor). */
-export const FORKABLE: string[] = [...Object.keys(SEARCH_BLOCKS), ...Object.keys(EVAL_TERMS)];
+export const FORKABLE: string[] = [...Object.keys(SEARCH_BLOCKS), ...Object.keys(EVAL_TERMS), ...SKELETON_TYPES];

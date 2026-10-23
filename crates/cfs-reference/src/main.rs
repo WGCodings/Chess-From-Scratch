@@ -1,7 +1,8 @@
-// CFS Reference: built with Chess From Scratch.
+// @block engine
+// A chess engine built with Chess From Scratch.
 //
 // Your engine:
-//   search.rs    the negamax skeleton and the search blocks you placed
+//   search.rs    the search and the search blocks you placed
 //   eval.rs      the evaluation terms you placed
 //   params.rs    every block parameter, ready to tune
 //
@@ -36,3 +37,4 @@ fn main() {
         uci::run::<search::Searcher>();
     }
 }
+// @end engine

@@ -7,10 +7,13 @@ import {
   SEARCH_BLOCKS,
   SEARCH_SLOTS,
   TIME_BLOCKS,
+  NEGAMAX_PARAMS,
   TRANSPOSITION_TABLE,
   defaultParams,
   evalSpec,
   searchSpec,
+  skeletonSpec,
+  type SkeletonType,
   type EvalTermType,
   type ParamSpec,
   type ParamValue,
@@ -19,9 +22,10 @@ import {
   type TimeBlockType,
 } from "./blocks";
 import { parseBlockFile, regionOf, type BlockFile, type Diagnostic } from "./blockfile";
-import { customRegions } from "./custom";
+import { customRegions, traceTemplate } from "./custom";
+import { TEMPLATES } from "./embedded.generated";
 
-export const WORKSPACE_FORMAT_VERSION = 1;
+export const WORKSPACE_FORMAT_VERSION = 2;
 
 /** Low on purpose: a bench without pruning blocks must still finish in seconds. */
 export const DEFAULT_BENCH_DEPTH = 5;
@@ -33,6 +37,9 @@ export interface BlockInstance<T extends string> {
   type: T;
   params: Params;
 }
+
+/** The kinds of search that plug into the engine; "none" while the slot is empty. */
+export type SearchKind = "negamax" | "random_mover" | "none";
 
 export interface Workspace {
   format: typeof WORKSPACE_FORMAT_VERSION;
@@ -47,24 +54,73 @@ export interface Workspace {
     transpositionTable: Params | null;
   };
   search: {
-    kind: "negamax";
+    kind: SearchKind;
+    /** Negamax's own parameters (its fixed depth). */
+    params: Params;
     /** Built-in block types or ids of custom blocks. */
     slots: Record<SearchSlot, BlockInstance<string>[]>;
   };
   eval: {
-    kind: "hce";
+    kind: "hce" | "none";
+    /** The Tapered evaluation block is placed: blend middlegame and endgame by phase. */
+    taper: boolean;
     /** Built-in eval terms or ids of custom blocks. */
     terms: BlockInstance<string>[];
   };
+  /**
+   * Your own versions of skeleton blocks: skeleton type (engine, negamax,
+   * hce, taper, transposition_table, basic_time, ...) → custom block id.
+   */
+  versions?: Partial<Record<SkeletonType, string>>;
+  /**
+   * Parameters of your versions of the Engine, Random mover, Hand-crafted
+   * evaluation and Tapered evaluation (the built-in ones have none; the
+   * others keep theirs in `search.params`, `timeManagement` and `transpositionTable`).
+   */
+  versionParams?: Partial<Record<SkeletonType, Params>>;
   /** This project's custom blocks: id → block file text (`<id>.block.rs`). */
   customBlocks?: Record<string, string>;
 }
 
-/** Fills in parts older saved workspaces lack (new slots, custom blocks). */
+/**
+ * Fills in parts older saved workspaces lack, and upgrades format 1: back
+ * then iterative deepening, draw detection and tapering were always on, so
+ * they become blocks.
+ */
 export function normalizeWorkspace(ws: Workspace): Workspace {
+  const w = ws as unknown as { format: number };
   for (const slot of SEARCH_SLOTS) ws.search.slots[slot] ??= [];
   ws.customBlocks ??= {};
+  ws.versions ??= {};
+  ws.search.params ??= defaultParams(NEGAMAX_PARAMS);
+  if (w.format === 1) {
+    w.format = WORKSPACE_FORMAT_VERSION;
+    const has = (t: string) => SEARCH_SLOTS.some((s) => ws.search.slots[s].some((b) => b.type === t));
+    if (!has("iterative_deepening")) ws.search.slots.root.unshift({ type: "iterative_deepening", params: {} });
+    if (!has("draw_detection")) ws.search.slots.pruning.unshift({ type: "draw_detection", params: {} });
+    ws.eval.taper = true;
+    // Format 1 always had negamax and the hand-crafted evaluation.
+    ws.search.kind = "negamax";
+    ws.eval.kind = "hce";
+  }
+  ws.versionParams ??= {};
+  ws.eval.taper ??= false;
   return ws;
+}
+
+/**
+ * A skeleton's stored parameters as your version's parameters: values kept
+ * under the built-in keys (from before the version existed) move to the
+ * version's parameter with the same Rust name; missing ones get defaults.
+ */
+export function asVersionParams(builtin: ParamSpec[], version: ParamSpec[], params: Params): Params {
+  const out: Params = defaultParams(version);
+  for (const p of builtin) {
+    const q = version.find((v) => v.rust === p.rust && v.type === p.type);
+    if (q && params[p.key] !== undefined) out[q.key] = params[p.key]!;
+  }
+  for (const v of version) if (params[v.key] !== undefined) out[v.key] = params[v.key]!;
+  return out;
 }
 
 const parsed = new Map<string, { block: BlockFile | null; diagnostics: Diagnostic[] }>();
@@ -94,6 +150,8 @@ export function placedCustomBlocks(ws: Workspace): BlockFile[] {
     const b = customBlock(ws, type);
     if (b && !out.includes(b)) out.push(b);
   };
+  // Versions of skeleton blocks first: they hold everything else.
+  for (const id of Object.values(ws.versions ?? {})) if (id) add(id);
   for (const slot of SEARCH_SLOTS) for (const b of ws.search.slots[slot] ?? []) add(b.type);
   for (const t of ws.eval.terms) add(t.type);
   return out;
@@ -107,7 +165,7 @@ function evalTerm(type: EvalTermType): BlockInstance<string> {
   return { type, params: defaultParams(EVAL_TERMS[type].params) };
 }
 
-/** A workspace with no search or eval blocks: the bare skeleton. */
+/** Just the Engine block: nothing plugged in yet. */
 export function emptyWorkspace(name = "My Engine", author = "me"): Workspace {
   return {
     format: WORKSPACE_FORMAT_VERSION,
@@ -119,10 +177,13 @@ export function emptyWorkspace(name = "My Engine", author = "me"): Workspace {
       transpositionTable: null,
     },
     search: {
-      kind: "negamax",
+      kind: "none",
+      params: defaultParams(NEGAMAX_PARAMS),
       slots: { root: [], pruning: [], ordering: [], extensions: [], move_loop: [], reductions: [], leaf: [] },
     },
-    eval: { kind: "hce", terms: [] },
+    eval: { kind: "none", taper: false, terms: [] },
+    versions: {},
+    versionParams: {},
     customBlocks: {},
   };
 }
@@ -134,12 +195,16 @@ export function timeBlock(type: TimeBlockType): BlockInstance<TimeBlockType> {
 /** Every MVP block with default parameters: generates the reference engine. */
 export function referenceWorkspace(): Workspace {
   const ws = emptyWorkspace("CFS Reference", "WG");
+  ws.search.kind = "negamax";
+  ws.eval.kind = "hce";
+  ws.eval.taper = true;
   ws.engine.timeManagement = timeBlock("time_management");
   ws.engine.transpositionTable = defaultParams(TRANSPOSITION_TABLE.params);
   for (const type of Object.keys(SEARCH_BLOCKS) as SearchBlockType[]) {
     ws.search.slots[SEARCH_BLOCKS[type].slot].push(searchBlock(type));
   }
-  ws.eval.terms = (Object.keys(EVAL_TERMS) as EvalTermType[]).map(evalTerm);
+  // Material and the empty piece-square tables are the simple alternative to PeSTO.
+  ws.eval.terms = (Object.keys(EVAL_TERMS) as EvalTermType[]).filter((t) => t !== "material" && t !== "psqt").map(evalTerm);
   return ws;
 }
 
@@ -147,15 +212,15 @@ export function referenceWorkspace(): Workspace {
 export const BARE_BENCH_DEPTH = 3;
 
 /**
- * The starting point for beginners: bare bones. Plain negamax, basic time
- * management and PeSTO tables, so the engine plays legal, sensible chess and
- * every improvement is a block you add yourself.
+ * The starting point for beginners: an engine with plain fixed-depth negamax
+ * and an evaluation without terms. Every improvement is a block you add
+ * yourself, starting with Material.
  */
 export function starterWorkspace(): Workspace {
   const ws = emptyWorkspace();
   ws.engine.benchDepth = BARE_BENCH_DEPTH;
-  ws.engine.timeManagement = timeBlock("basic_time");
-  ws.eval.terms = [evalTerm("pesto")];
+  ws.search.kind = "negamax";
+  ws.eval.kind = "hce";
   return ws;
 }
 
@@ -208,6 +273,7 @@ function checkParams(where: string, specs: ParamSpec[], params: Params, issues: 
 /** Checks a workspace. Errors block code generation; warnings do not. */
 export function validate(ws: Workspace): Issue[] {
   const issues: Issue[] = [];
+  normalizeWorkspace(ws);
   if (ws.format !== WORKSPACE_FORMAT_VERSION) {
     issues.push({ level: "error", message: `Unsupported workspace format ${String(ws.format)}.` });
     return issues;
@@ -219,15 +285,8 @@ export function validate(ws: Workspace): Issue[] {
   }
 
   const tm = ws.engine.timeManagement;
-  normalizeWorkspace(ws);
-  if (tm) {
-    const spec = TIME_BLOCKS[tm.type];
-    if (!spec) issues.push({ level: "error", message: `Unknown time block "${tm.type}".` });
-    else checkParams(spec.label, spec.params, tm.params, issues);
-  }
-  if (ws.engine.transpositionTable) {
-    checkParams("Transposition table", TRANSPOSITION_TABLE.params, ws.engine.transpositionTable, issues);
-  }
+  const versions = ws.versions ?? {};
+  if (tm && !TIME_BLOCKS[tm.type]) issues.push({ level: "error", message: `Unknown time block "${tm.type}".` });
 
   // Custom blocks: their files must parse; the ones placed are checked like built-ins.
   const custom = new Map<string, BlockFile>();
@@ -262,9 +321,52 @@ export function validate(ws: Workspace): Issue[] {
     }
   };
   for (const name of ["ENGINE_NAME", "ENGINE_AUTHOR", "ENGINE_BENCH_DEPTH"]) paramOwner.set(name, "Engine");
-  const tmSpec = tm ? TIME_BLOCKS[tm.type] : TIME_BLOCKS.basic_time;
-  if (tmSpec) claimParams(tmSpec.label, tmSpec.params);
-  if (ws.engine.transpositionTable) claimParams(TRANSPOSITION_TABLE.label, TRANSPOSITION_TABLE.params);
+
+  // Skeleton blocks, built in or your own version: their parameters live in the workspace.
+  const skeletonParams: [SkeletonType, Params | null][] = [
+    ["negamax", ws.search.kind === "negamax" ? ws.search.params : null],
+    ["transposition_table", ws.engine.transpositionTable],
+    [tm?.type ?? "basic_time", tm ? tm.params : null],
+    ["engine", ws.versionParams?.engine ?? {}],
+    ["random_mover", ws.search.kind === "random_mover" ? (ws.versionParams?.random_mover ?? {}) : null],
+    ["hce", ws.eval.kind === "hce" ? (ws.versionParams?.hce ?? {}) : null],
+    ["taper", ws.eval.kind === "hce" && ws.eval.taper ? (ws.versionParams?.taper ?? {}) : null],
+  ];
+  for (const [type, params] of skeletonParams) {
+    const vid = versions[type];
+    const version = vid ? custom.get(vid) : undefined;
+    const spec = skeletonSpec(type);
+    const isPlaced = params !== null || (type === "basic_time" && !tm);
+    if (!isPlaced || !spec) continue;
+    if (version) {
+      claimParams(version.label, version.params);
+      if (params) checkParams(version.label, version.params, asVersionParams(spec.params, version.params, params), issues);
+    } else {
+      claimParams(spec.label, spec.params);
+      if (params) checkParams(spec.label, spec.params, params, issues);
+    }
+  }
+  for (const [type, id] of Object.entries(versions) as [SkeletonType, string][]) {
+    if (!id) continue;
+    const b = custom.get(id);
+    if (!b) {
+      if (!ws.customBlocks?.[id]) {
+        issues.push({ level: "error", message: `Unknown block "${id}" (your version of ${skeletonSpec(type)?.label ?? type}).` });
+      }
+      continue;
+    }
+    if (b.base !== type) issues.push({ level: "error", message: `${b.label} is not a version of ${skeletonSpec(type)?.label ?? type}.` });
+  }
+
+  // What plugs into the engine.
+  if (ws.search.kind === "none") {
+    issues.push({ level: "error", message: "Plug a search into the engine: Negamax search or Random mover." });
+  } else if (ws.search.kind === "negamax" && ws.eval.kind === "none") {
+    issues.push({ level: "error", message: "Negamax needs an evaluation: plug Hand-crafted evaluation into the engine." });
+  }
+  if (ws.search.kind !== "negamax" && SEARCH_SLOTS.some((s) => ws.search.slots[s].length)) {
+    issues.push({ level: "error", message: "Search blocks go into the slots of Negamax search." });
+  }
 
   const checkCustom = (block: BlockInstance<string>, where: string): BlockFile | null => {
     const b = custom.get(block.type);
@@ -331,6 +433,11 @@ export function validate(ws: Workspace): Issue[] {
     placed.add(base);
   }
   if (ws.engine.transpositionTable) placed.add("transposition_table");
+  for (const t of seenTerms) placed.add(t);
+  if (ws.search.kind !== "none") placed.add(ws.search.kind);
+  if (ws.eval.kind === "hce") placed.add("hce");
+  if (ws.eval.kind === "hce" && ws.eval.taper) placed.add("taper");
+  for (const id of Object.values(versions)) if (id) placed.add(id);
   const labelOf = (need: string) =>
     need === "transposition_table"
       ? TRANSPOSITION_TABLE.label
@@ -345,19 +452,47 @@ export function validate(ws: Workspace): Issue[] {
       }
     }
   }
+  // Inserts and replacements must find their line in the generated code.
+  const blocks = placedCustomBlocks(ws);
+  const files = new Set(
+    blocks.flatMap((b) => b.sections.flatMap((s) => ((s.kind === "insert" || s.kind === "replace") && s.file.replace(/\.rs$/, "") in TEMPLATES ? [s.file] : []))),
+  );
+  for (const file of files) {
+    const traced = traceTemplate(TEMPLATES[file.replace(/\.rs$/, "") as keyof typeof TEMPLATES], file, blocks, enabledRegions(ws));
+    for (const m of traced.missed ?? []) {
+      const b = blocks.find((x) => x.id === m.block);
+      issues.push({ level: "error", message: `${b?.label ?? m.block}: ${m.why}.` });
+    }
+  }
   if (ws.engine.transpositionTable && !placed.has("alpha_beta")) {
     issues.push({ level: "error", message: "Transposition table needs Alpha-beta pruning." });
   }
 
-  if (ws.eval.terms.length === 0) {
+  if (ws.eval.kind === "hce") {
+    if (ws.eval.terms.length === 0) {
+      issues.push({
+        level: "warning",
+        message: "The evaluation has no terms, so every position scores 0. Add Material to start.",
+      });
+    } else if (!seenTerms.has("pesto") && !seenTerms.has("material")) {
+      issues.push({
+        level: "warning",
+        message: "Without Material (or PeSTO tables) the engine does not know piece values.",
+      });
+    }
+  }
+  if (tm && !placed.has("iterative_deepening")) {
     issues.push({
       level: "warning",
-      message: "The evaluation has no terms, so every position scores 0. Add PeSTO tables to start.",
+      message: "Time management only matters with Iterative deepening; without it the engine searches a fixed depth.",
     });
-  } else if (!seenTerms.has("pesto")) {
+  }
+  if (ws.search.kind !== "negamax") return issues;
+  if (!placed.has("iterative_deepening")) {
+    const depth = ws.search.params.depth ?? NEGAMAX_PARAMS[0]!.default;
     issues.push({
       level: "warning",
-      message: "Without PeSTO tables the engine does not know piece values.",
+      message: `Without Iterative deepening the engine searches depth ${String(depth)} on every move and ignores the clock.`,
     });
   }
   if (!placed.has("alpha_beta")) {
@@ -382,8 +517,11 @@ export function validate(ws: Workspace): Issue[] {
 
 /** Names of every block region enabled in the Rust templates. */
 export function enabledRegions(ws: Workspace, includeTests = false): Set<string> {
-  const regions = new Set<string>();
+  const regions = new Set<string>(["engine"]);
   if (includeTests) regions.add("tests");
+  if (ws.search.kind !== "none") regions.add(ws.search.kind);
+  if (ws.eval.kind === "hce") regions.add("hce");
+  if (ws.eval.kind === "hce" && ws.eval.taper) regions.add("taper");
   if (ws.engine.transpositionTable) regions.add("transposition_table");
   // Without a time block the engine uses basic time management.
   regions.add(ws.engine.timeManagement?.type ?? "basic_time");
@@ -392,12 +530,21 @@ export function enabledRegions(ws: Workspace, includeTests = false): Set<string>
   }
   for (const term of ws.eval.terms) if (evalSpec(term.type)) regions.add(regionOf(term.type));
   for (const r of customRegions(placedCustomBlocks(ws))) regions.add(r);
+  // Which files exist, for the lines that mention them (main.rs).
+  if (regions.has("hce")) regions.add("file_eval");
+  if (regions.has("eval_psqt")) regions.add("file_psqt");
+  if (regions.has("transposition_table")) regions.add("file_tt");
   return regions;
 }
 
 /** Every region name a template may use. */
 export const KNOWN_REGIONS: ReadonlySet<string> = new Set([
   "tests",
+  "engine",
+  "negamax",
+  "random_mover",
+  "hce",
+  "taper",
   "basic_time",
   "time_management",
   "transposition_table",

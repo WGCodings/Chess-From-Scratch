@@ -8,6 +8,9 @@ import {
   BASIC_TIME,
   TIME_BLOCKS,
   TRANSPOSITION_TABLE,
+  NEGAMAX_PARAMS,
+  defaultParams,
+  type SkeletonType,
   type ParamSpec,
   type ParamValue,
   type Score,
@@ -18,6 +21,7 @@ import { applyToGenerated, customFiles, moduleOf, traceTemplate, type Origin } f
 import { serializeBlock, type BlockFile } from "./blockfile";
 import {
   KNOWN_REGIONS,
+  asVersionParams,
   enabledRegions,
   normalizeWorkspace,
   placedCustomBlocks,
@@ -32,6 +36,8 @@ export interface GeneratedFile {
   contents: string;
   /** Rust templates only: for each line, the blocks whose code it is (empty = skeleton). */
   owners?: string[][];
+  /** The template the file was made from ("search", "random", ...). */
+  template?: string;
   /** Rust templates and block files: where each line came from (for editing code in place). */
   origins?: Origin[];
   /** Hooks in this file: `at` = the line they stand before, `text` = the hook line itself. */
@@ -123,10 +129,19 @@ export function generateParams(ws: Workspace): string {
     ].join("\n"),
   ];
   const push = (s: string | null) => s && sections.push(s);
+  const custom = placedCustomBlocks(ws);
+  const byId = new Map(custom.map((b) => [b.id, b]));
+  /** A skeleton block's section: your version's parameters when there is one. */
+  const skeletonSection = (type: SkeletonType, specs: ParamSpec[], params: Params) => {
+    const version = ws.versions?.[type] ? byId.get(ws.versions[type]!) : undefined;
+    if (!version) return paramSection(type, specs, params);
+    return paramSection(version.id, version.params, asVersionParams(specs, version.params, params));
+  };
 
+  if (ws.search.kind === "negamax") push(skeletonSection("negamax", NEGAMAX_PARAMS, ws.search.params));
   const tm = ws.engine.timeManagement;
   if (tm) {
-    push(paramSection(tm.type, TIME_BLOCKS[tm.type].params, tm.params));
+    push(skeletonSection(tm.type, TIME_BLOCKS[tm.type].params, tm.params));
   } else {
     sections.push(
       [
@@ -136,13 +151,25 @@ export function generateParams(ws: Workspace): string {
     );
   }
   if (ws.engine.transpositionTable) {
-    push(paramSection("transposition_table", TRANSPOSITION_TABLE.params, ws.engine.transpositionTable));
+    push(skeletonSection("transposition_table", TRANSPOSITION_TABLE.params, ws.engine.transpositionTable));
+  }
+  // Your versions of skeleton blocks that have no parameters of their own.
+  const unparamed: [SkeletonType, boolean][] = [
+    ["engine", true],
+    ["random_mover", ws.search.kind === "random_mover"],
+    ["hce", ws.eval.kind === "hce"],
+    ["taper", ws.eval.kind === "hce" && ws.eval.taper],
+  ];
+  for (const [type, isPlaced] of unparamed) {
+    const version = ws.versions?.[type] ? byId.get(ws.versions[type]!) : undefined;
+    if (isPlaced && version) {
+      push(paramSection(version.id, version.params, { ...defaultParams(version.params), ...ws.versionParams?.[type] }));
+    }
   }
   // Custom blocks: a version of a built-in block takes that block's place.
   const instances = new Map([...Object.values(ws.search.slots).flat(), ...ws.eval.terms].map((b) => [b.type, b.params]));
   const customSection = (b: BlockFile) =>
     paramSection(b.id, b.params, { ...Object.fromEntries(b.params.map((p) => [p.key, p.default])), ...instances.get(b.id) });
-  const custom = placedCustomBlocks(ws);
   const forks = new Map(custom.filter((b) => b.base).map((b) => [b.base!, b]));
   // Catalogue order keeps the file stable however blocks are arranged.
   const placed = new Map(
@@ -171,54 +198,38 @@ export function generateParams(ws: Workspace): string {
     "",
     "#![allow(dead_code, unused_imports)]",
     "",
-    "use crate::eval::S;",
-    "",
+    ...(ws.eval.kind === "hce" ? ["use crate::eval::S;", ""] : []),
     sections.join("\n\n"),
     "",
   ].join("\n");
 }
 
-/** Which template files a project needs; tt.rs only with a transposition table. */
-function templateFiles(ws: Workspace): (keyof typeof TEMPLATES)[] {
-  const files: (keyof typeof TEMPLATES)[] = ["search", "eval", "uci", "position", "time", "moves", "score", "bench"];
-  if (ws.engine.transpositionTable) files.push("tt");
+/** The template files a project needs, and the path each becomes. */
+function templateFiles(ws: Workspace, enabled: Set<string>): { template: keyof typeof TEMPLATES; path: string }[] {
+  const files: { template: keyof typeof TEMPLATES; path: string }[] = [];
+  const add = (template: keyof typeof TEMPLATES, path = `src/${template}.rs`) => files.push({ template, path });
+  add("main");
+  if (ws.search.kind === "negamax") add("search");
+  if (ws.search.kind === "random_mover") add("random", "src/search.rs");
+  if (enabled.has("file_eval")) add("eval");
+  if (enabled.has("file_psqt")) add("psqt");
+  for (const t of ["uci", "position", "time", "moves", "score", "bench"] as const) add(t);
+  if (enabled.has("file_tt")) add("tt");
   return files;
 }
 
-export function generateMain(ws: Workspace, extraModules: string[] = []): string {
-  const modules = [...new Set(["params", ...templateFiles(ws), ...extraModules])].sort();
-  return [
-    `// ${ws.engine.name.replace(/[\r\n]+/g, " ")}: built with Chess From Scratch.`,
-    "//",
-    "// Your engine:",
-    "//   search.rs    the negamax skeleton and the search blocks you placed",
-    "//   eval.rs      the evaluation terms you placed",
-    "//   params.rs    every block parameter, ready to tune",
-    "//",
-    "// The machinery around it (yours to change too):",
-    "//   uci.rs       talks to chess GUIs (UCI protocol)",
-    "//   position.rs  the board plus history for repetition detection",
-    "//   time.rs      decides how long to think",
-    "//   moves.rs     move lists and the principal variation",
-    "//   score.rs     score constants and info output",
-    "//   bench.rs     the `bench` command",
-    ...(ws.engine.transpositionTable ? ["//   tt.rs        the transposition table"] : []),
-    "",
-    "// The files (modules) the engine is made of.",
-    ...modules.map((m) => `mod ${m};`),
-    "",
-    "// Start: run `bench` when asked on the command line (OpenBench does this), otherwise talk UCI.",
-    "fn main() {",
-    "    let args: Vec<String> = std::env::args().skip(1).collect();",
-    '    if args.first().map(String::as_str) == Some("bench") {',
-    "        let depth = args.get(1).and_then(|d| d.parse().ok());",
-    "        bench::run::<search::Searcher>(depth);",
-    "    } else {",
-    "        uci::run::<search::Searcher>();",
-    "    }",
-    "}",
-    "",
-  ].join("\n");
+/** Adds `mod` lines for files blocks add, in the sorted list rustfmt keeps. */
+function addModules(main: string, modules: string[]): string {
+  if (!modules.length) return main;
+  const lines = main.split("\n");
+  for (const m of modules) {
+    const line = `mod ${m};`;
+    if (lines.includes(line)) continue;
+    const mods = lines.map((l, i) => (/^mod \w+;$/.test(l) ? i : -1)).filter((i) => i >= 0);
+    const after = mods.filter((i) => lines[i]! < line).at(-1) ?? mods[0]! - 1;
+    lines.splice(after + 1, 0, line);
+  }
+  return lines.join("\n");
 }
 
 /** The exported project's Cargo.toml. */
@@ -328,21 +339,26 @@ export function generateProject(ws: Workspace, options: GenerateOptions = {}): G
   const blocks = placedCustomBlocks(ws);
   const enabled = enabledRegions(ws, options.includeTests);
   const known = new Set([...KNOWN_REGIONS, ...blocks.map((b) => b.id)]);
-  const render = (name: keyof typeof TEMPLATES): GeneratedFile => {
-    const traced = traceTemplate(TEMPLATES[name], `${name}.rs`, blocks);
+  const extra = customFiles(blocks);
+  const render = ({ template: name, path }: { template: keyof typeof TEMPLATES; path: string }): GeneratedFile => {
+    const traced = traceTemplate(TEMPLATES[name], `${name}.rs`, blocks, enabled);
     const r = renderTemplateWithOwners(traced.lines.join("\n"), enabled, known, `${name}.rs`);
+    const contents =
+      name === "main" ? addModules(r.text, extra.map((f) => moduleOf(f.path)).filter((m): m is string => !!m)) : r.text;
+    const added = contents.split("\n").length - r.text.split("\n").length;
     return {
-      path: `src/${name}.rs`,
-      contents: r.text,
-      owners: r.owners,
-      origins: r.sources.map((k) => traced.origins[k]!),
+      path,
+      template: name,
+      contents,
+      // Added `mod` lines (main.rs) are not tracked; edits in main.rs still map to its template.
+      owners: added ? undefined : r.owners,
+      origins: added ? undefined : r.sources.map((k) => traced.origins[k]!),
       hooks: r.hooks.map((h) => {
         const text = traced.lines[h.source]!;
         return { at: h.at, name: /@hook (\w+)/.exec(text)![1]!, text };
       }),
     };
   };
-  const extra = customFiles(blocks);
   const generated = (contents: string, file: string) => (blocks.length ? applyToGenerated(contents, file, blocks) : contents);
   const ownedBy = (contents: string, owner: string) => contents.replace(/\n$/, "").split("\n").map(() => [owner]);
   const custom = Object.entries(ws.customBlocks ?? {}).sort(([a], [b]) => a.localeCompare(b));
@@ -354,12 +370,8 @@ export function generateProject(ws: Workspace, options: GenerateOptions = {}): G
     { path: ".cargo/config.toml", contents: CARGO_CONFIG },
     { path: "workspace.json", contents: `${JSON.stringify(ws, null, 2)}\n` },
     ...custom.map(([id, src]) => ({ path: `blocks/${id}.block.rs`, contents: src.endsWith("\n") ? src : `${src}\n` })),
-    {
-      path: "src/main.rs",
-      contents: generated(generateMain(ws, extra.map((f) => moduleOf(f.path)).filter((m): m is string => !!m)), "main.rs"),
-    },
     { path: "src/params.rs", contents: generated(generateParams(ws), "params.rs") },
-    ...templateFiles(ws).map(render),
+    ...templateFiles(ws, enabled).map(render),
     ...extra.map((f) => ({
       path: f.path,
       contents: f.contents,

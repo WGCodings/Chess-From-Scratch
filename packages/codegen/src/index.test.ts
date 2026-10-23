@@ -17,6 +17,8 @@ import {
   starterWorkspace,
   toCrateName,
   validate,
+  timeBlock,
+  isPseudo,
 } from "./index";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -92,11 +94,14 @@ describe("validate", () => {
   });
   it("rejects out-of-range parameters", () => {
     const ws = referenceWorkspace();
-    ws.search.slots.pruning[0]!.params.margin = -5;
+    ws.search.slots.pruning.find((b) => b.type === "reverse_futility_pruning")!.params.margin = -5;
     expect(() => generateProject(ws)).toThrow(GenerateError);
   });
   it("warns about an empty evaluation", () => {
-    expect(validate(emptyWorkspace()).some((i) => i.level === "warning")).toBe(true);
+    expect(validate(starterWorkspace()).map((i) => i.message)).toContain(
+      "The evaluation has no terms, so every position scores 0. Add Material to start.",
+    );
+    expect(validate(emptyWorkspace()).map((i) => i.message)).toContain("Plug a search into the engine: Negamax search or Random mover.");
   });
 });
 
@@ -114,7 +119,7 @@ describe("generateProject", () => {
   });
 
   it("is one crate containing only the code the blocks use", () => {
-    const files = generateProject(emptyWorkspace());
+    const files = generateProject(starterWorkspace());
     const paths = files.map((f) => f.path);
     expect(paths.some((p) => p.startsWith("runtime/"))).toBe(false);
     expect(paths).not.toContain("src/tt.rs");
@@ -131,9 +136,11 @@ describe("generateProject", () => {
       generateProject(ws).find((f) => f.path === "src/time.rs")!.contents;
     const params = (ws: ReturnType<typeof emptyWorkspace>) =>
       generateProject(ws).find((f) => f.path === "src/params.rs")!.contents;
-    expect(time(emptyWorkspace())).toContain("usable / mtg + inc / 2");
-    expect(params(emptyWorkspace())).toContain("pub const TM_MOVES_LEFT: u64 = 40;");
-    expect(params(starterWorkspace())).toContain("// @block basic_time");
+    expect(time(starterWorkspace())).toContain("usable / mtg + inc / 2");
+    expect(params(starterWorkspace())).toContain("pub const TM_MOVES_LEFT: u64 = 40;");
+    const basic = starterWorkspace();
+    basic.engine.timeManagement = timeBlock("basic_time");
+    expect(params(basic)).toContain("// @block basic_time");
     expect(time(referenceWorkspace())).toContain("TM_HARD_MULTIPLIER");
     expect(time(referenceWorkspace())).not.toContain("TM_MOVES_LEFT");
   });
@@ -198,7 +205,8 @@ describe("generateProject", () => {
   });
 
   it("only uses known regions", () => {
-    for (const r of enabledRegions(referenceWorkspace(), true)) expect(KNOWN_REGIONS.has(r)).toBe(true);
-    for (const r of enabledRegions(emptyWorkspace())) expect(KNOWN_REGIONS.has(r)).toBe(true);
+    for (const ws of [referenceWorkspace(), starterWorkspace(), emptyWorkspace()]) {
+      for (const r of enabledRegions(ws, true)) expect(KNOWN_REGIONS.has(r) || isPseudo(r), r).toBe(true);
+    }
   });
 });

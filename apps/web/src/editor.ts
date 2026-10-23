@@ -278,3 +278,91 @@ export function openNewBlockDialog(onCreate: (label: string, slot: CustomSlot) =
   name.select();
   name.focus();
 }
+
+export type SaveChoice = { mode: "change" } | { mode: "top"; name: string };
+
+/**
+ * Asks how to save code that changes existing blocks: change them (or make
+ * your own version of a built-in one), or keep them as they are and save the
+ * change as a new block on top. Resolves to null when cancelled.
+ */
+export function openSaveChoice(opts: {
+  /** What changing means here, e.g. "Change My PVS". */
+  changeText: string;
+  /** The blocks the change is about, e.g. "My PVS". */
+  blocks: string;
+  defaultName: string;
+  /** Start with "new block on top" selected and no change option (right-click > New block on top). */
+  onTopOnly?: boolean;
+}): Promise<SaveChoice | null> {
+  return new Promise((resolve) => {
+    const backdrop = el("div", "be-backdrop");
+    const form = el("form", "be be-small save-choice");
+    form.setAttribute("role", "dialog");
+    form.setAttribute("aria-label", "Save changes");
+    form.append(el("strong", "be-title", opts.onTopOnly ? "New block on top" : "Save your changes"));
+    form.append(
+      el(
+        "p",
+        "be-note",
+        opts.onTopOnly
+          ? `Changes you make inside the code of ${opts.blocks} become a new block that builds on it. ${opts.blocks} itself stays as it is.`
+          : `You changed code of ${opts.blocks}.`,
+      ),
+    );
+    const option = (value: string, title: string, note: string, checked: boolean) => {
+      const label = el("label", "choice");
+      const radio = el("input");
+      radio.type = "radio";
+      radio.name = "how";
+      radio.value = value;
+      radio.checked = checked;
+      const text = el("span");
+      text.append(el("strong", undefined, title), el("small", undefined, note));
+      label.append(radio, text);
+      return { label, radio };
+    };
+    const change = option("change", opts.changeText, "The block's own code changes.", !opts.onTopOnly);
+    const top = option("top", "New block on top of it", `${opts.blocks} stays as it is; the change is a new block that needs it. Remove the new block and the old code is back.`, true);
+    const nameLabel = el("label", "be-field", "Name of the new block");
+    const name = el("input");
+    name.value = opts.defaultName;
+    nameLabel.append(name);
+    const sync = () => {
+      nameLabel.hidden = !top.radio.checked;
+    };
+    change.radio.addEventListener("change", sync);
+    top.radio.addEventListener("change", sync);
+    if (!opts.onTopOnly) form.append(change.label, top.label);
+    form.append(nameLabel);
+    if (!opts.onTopOnly) {
+      change.radio.checked = true;
+      top.radio.checked = false;
+    }
+    sync();
+    const foot = el("div", "be-foot");
+    const cancel = el("button", "btn", "Cancel");
+    cancel.type = "button";
+    const ok = el("button", "btn primary", opts.onTopOnly ? "Start editing" : "Save");
+    ok.type = "submit";
+    foot.append(el("span", "be-spacer"), cancel, ok);
+    form.append(foot);
+    backdrop.append(form);
+    document.body.append(backdrop);
+    const close = (value: SaveChoice | null) => {
+      backdrop.remove();
+      resolve(value);
+    };
+    cancel.addEventListener("click", () => close(null));
+    form.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") close(null);
+      e.stopPropagation();
+    });
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      close(top.radio.checked || opts.onTopOnly ? { mode: "top", name: name.value.trim() || opts.defaultName } : { mode: "change" });
+    });
+    (opts.onTopOnly ? name : ok).focus();
+    if (opts.onTopOnly) name.select();
+  });
+}

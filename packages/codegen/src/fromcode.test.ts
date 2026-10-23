@@ -61,7 +61,7 @@ describe("viewOf", () => {
     const ws = bare();
     const { files, lines } = view(ws);
     const r = codeToBlocks(ws, files, [{ path: "src/search.rs", text: lines.join("\n") }]);
-    expect(r).toEqual({ sources: {}, created: [], forks: [], errors: [] });
+    expect(r).toEqual({ sources: {}, created: [], forks: [], changed: [], errors: [] });
   });
 });
 
@@ -95,7 +95,7 @@ describe("codeToBlocks", () => {
     expect(r.errors).toEqual([]);
     const block = parseBlockFile(r.sources.deep_count!).block!;
     expect(block.sections[0]).toMatchObject({ kind: "insert", file: "search.rs", anchor: "self.seldepth = self.seldepth.max(ply);" });
-    place(ws, "deep_count", r.sources.deep_count!, block.slot);
+    place(ws, "deep_count", r.sources.deep_count!, block.slot as CustomSlot);
     const out = generateProject(ws).find((f) => f.path === "src/search.rs")!.contents.split("\n");
     const placedAt = out.findIndex((l) => l.includes("self.nodes += 0;"));
     expect(out[placedAt - 2]!.trim()).toBe("self.seldepth = self.seldepth.max(ply);");
@@ -149,13 +149,14 @@ describe("codeToBlocks", () => {
     expect(out).toContain(lines[k]);
   });
 
-  it("refuses changes to skeleton code", () => {
+  it("makes your own version of the skeleton you change", () => {
     const ws = bare();
     const { files, lines } = view(ws);
     const k = at(lines, "self.seldepth = self.seldepth.max(ply);", 1);
     lines[k] = "        self.seldepth = ply;";
     const r = codeToBlocks(ws, files, [{ path: "src/search.rs", text: lines.join("\n") }]);
-    expect(r.errors).toEqual([expect.objectContaining({ line: k + 1, message: expect.stringMatching(/Skeleton code/) })]);
+    expect(r.errors).toEqual([]);
+    expect(r.forks).toEqual([{ base: "negamax", id: "my_negamax" }]);
   });
 
   it("refuses loose code and reused names", () => {

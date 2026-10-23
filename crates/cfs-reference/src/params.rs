@@ -10,6 +10,11 @@ pub const ENGINE_AUTHOR: &str = "WG";
 pub const ENGINE_BENCH_DEPTH: i32 = 5;
 // @end engine
 
+// @block negamax
+/// Depth of the fixed-depth search (without iterative deepening).
+pub const NEGAMAX_DEPTH: i32 = 4;
+// @end negamax
+
 // @block time_management
 pub const TM_MOVES_TO_GO: u64 = 25;
 pub const TM_INC_PERCENT: u64 = 75;

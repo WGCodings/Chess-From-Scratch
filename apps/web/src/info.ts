@@ -10,11 +10,25 @@ import {
   TIME_BLOCKS,
   TRANSPOSITION_TABLE,
   evalSpec,
+  isCustomSlot,
   searchSpec,
+  skeletonSpec,
   type BlockFile,
   type Workspace,
 } from "@cfs/codegen";
-import { BASIC_TIME_BLOCK, COLOURS, CUSTOM_PREFIX, ENGINE, HCE, NEGAMAX, TIME, TT } from "./blocks";
+import { COLOURS, CUSTOM_PREFIX, skeletonOf } from "./blocks";
+
+/** Colour of each skeleton block (and of your versions of it). */
+const SKELETON_COLOUR: Record<string, string> = {
+  engine: COLOURS.engine,
+  negamax: COLOURS.skeleton,
+  random_mover: COLOURS.skeleton,
+  hce: COLOURS.eval,
+  taper: COLOURS.evalTerm,
+  transposition_table: COLOURS.setting,
+  basic_time: COLOURS.setting,
+  time_management: COLOURS.setting,
+};
 
 let customLookup: (id: string) => BlockFile | null = () => null;
 
@@ -34,12 +48,8 @@ export interface BlockInfo {
 
 /** Info for a Blockly block type, or null for non-CFS blocks. */
 export function infoForBlockType(type: string): BlockInfo | null {
-  if (type === ENGINE) return { key: "engine", ...SKELETON_INFO.engine, colour: COLOURS.engine };
-  if (type === NEGAMAX) return { key: "negamax", ...SKELETON_INFO.negamax, colour: COLOURS.skeleton };
-  if (type === HCE) return { key: "hce", ...SKELETON_INFO.hce, colour: COLOURS.eval };
-  if (type === TT) return infoForKey("transposition_table");
-  if (type === TIME) return infoForKey("time_management");
-  if (type === BASIC_TIME_BLOCK) return infoForKey("basic_time");
+  const skeleton = skeletonOf(type);
+  if (skeleton) return infoForKey(skeleton);
   if (type.startsWith("cfs_search_")) return infoForKey(type.slice("cfs_search_".length));
   if (type.startsWith("cfs_eval_")) return infoForKey(`eval_${type.slice("cfs_eval_".length)}`);
   if (type.startsWith(CUSTOM_PREFIX)) return infoForKey(type.slice(CUSTOM_PREFIX.length));
@@ -48,6 +58,10 @@ export function infoForBlockType(type: string): BlockInfo | null {
 
 /** Info for a block key (the same names as the template regions). */
 export function infoForKey(key: string): BlockInfo | null {
+  if (key in SKELETON_INFO) {
+    const spec = SKELETON_INFO[key as keyof typeof SKELETON_INFO];
+    return { key, label: spec.label, info: spec.info, cpw: spec.cpw, colour: SKELETON_COLOUR[key]! };
+  }
   if (key === "transposition_table") {
     return { key, label: TRANSPOSITION_TABLE.label, info: TRANSPOSITION_TABLE.info, cpw: TRANSPOSITION_TABLE.cpw, colour: COLOURS.setting };
   }
@@ -65,13 +79,13 @@ export function infoForKey(key: string): BlockInfo | null {
   }
   const b = customLookup(key);
   if (b) {
-    const base = b.base ? (searchSpec(b.base) ?? evalSpec(b.base)) : undefined;
+    const base = b.base ? (searchSpec(b.base) ?? evalSpec(b.base) ?? skeletonSpec(b.base)) : undefined;
     return {
       key,
       label: b.label,
       info: b.info || b.description || "Your own block.",
       cpw: b.cpw ?? base?.cpw ?? "",
-      colour: b.slot === "eval" ? COLOURS.evalTerm : COLOURS[b.slot],
+      colour: b.slot === "eval" ? COLOURS.evalTerm : isCustomSlot(b.slot) ? COLOURS[b.slot] : (SKELETON_COLOUR[b.base ?? ""] ?? COLOURS.skeleton),
     };
   }
   return null;
@@ -81,6 +95,11 @@ export function infoForKey(key: string): BlockInfo | null {
 export function placedKeys(ws: Workspace | null): Set<string> {
   const keys = new Set<string>();
   if (!ws) return keys;
+  keys.add("engine");
+  if (ws.search.kind !== "none") keys.add(ws.search.kind);
+  if (ws.eval.kind === "hce") keys.add("hce");
+  if (ws.eval.kind === "hce" && ws.eval.taper) keys.add("taper");
+  for (const id of Object.values(ws.versions ?? {})) if (id) keys.add(id);
   if (ws.engine.timeManagement) keys.add(ws.engine.timeManagement.type);
   if (ws.engine.transpositionTable) keys.add("transposition_table");
   for (const blocks of Object.values(ws.search.slots)) for (const b of blocks) keys.add(b.type);

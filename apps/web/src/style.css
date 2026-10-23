@@ -922,3 +922,34 @@ select:focus-visible {
   background: var(--error-bg);
   color: var(--error);
 }
+
+.save-choice .choice {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: start;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.save-choice .choice:has(input:checked) {
+  border-color: var(--accent, #2f6f4f);
+  background: var(--panel-2);
+}
+
+.save-choice .choice input {
+  margin-top: 3px;
+}
+
+.save-choice .choice span {
+  display: grid;
+  gap: 2px;
+  font-size: 13px;
+}
+
+.save-choice .choice small {
+  color: var(--muted);
+  font-size: 12px;
+}
