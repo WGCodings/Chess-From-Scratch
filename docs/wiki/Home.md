@@ -6,7 +6,8 @@ You don't need to know Rust to start. You will pick it up on the way, one block 
 
 ## Where to start
 
-- **Never made an engine before?** Follow [Your first engine](Your-First-Engine). It takes about ten minutes. (The same steps are in the app: click **Tutorial** at the top.)
+- **Never made an engine before?** Follow [Your first engine](Your-First-Engine). It takes about ten minutes. (The same steps are in the app: **☰ > Tutorial: your first engine**.)
+- **Your engine works? Make it stronger.** The second tutorial, **☰ > Tutorial: branches and tests**, turns the random mover into a Negamax search in a [branch](Branches), [tests](Testing-Changes) it and keeps it.
 - **Want to know what all the blocks are?** Read [The canvas](The-Canvas).
 - **Want to look at the code?** Read [Reading the code](Reading-The-Code).
 
@@ -22,6 +23,7 @@ You don't need to know Rust to start. You will pick it up on the way, one block 
 
 - [The desktop app](The-Desktop-App): build, run and talk to your engine with one click, with a terminal. Works offline.
 - [Branches](Branches): try an idea in a copy of your engine, then keep it or delete it.
+- [Playing your engine](Playing-Your-Engine): play a branch on the board, or let two branches play (desktop app).
 - [Testing your changes](Testing-Changes): find out if a change made your engine stronger (desktop app).
 - [Build, test and play](Build-Test-Play): compile it, check it, play it, and test if a change made it stronger.
 - [Saving and sharing](Saving-And-Sharing): where your work is kept, and how to move blocks between projects.

@@ -87,6 +87,19 @@ fn start_test(
     )
 }
 
+/// Follows fastchess's engine log at `path`; the lines that show games arrive on `on_lines`.
+#[tauri::command]
+fn watch_games(watch: State<'_, tester::LogWatch>, path: String, on_lines: Channel<Vec<String>>) {
+    watch.start(PathBuf::from(path), move |l| {
+        let _ = on_lines.send(l);
+    });
+}
+
+#[tauri::command]
+fn stop_watching(watch: State<'_, tester::LogWatch>) {
+    watch.stop();
+}
+
 #[tauri::command]
 async fn stop_test(app: tauri::AppHandle) -> Result<(), String> {
     app.state::<Tests>().stop();
@@ -138,28 +151,34 @@ async fn build_engine(dir: String, on_line: Channel<String>) -> Result<String, S
     })
 }
 
-/// Starts the engine program; its output arrives on `on_event`.
+/// Starts an engine program under `id` (replacing one with that id); its output arrives on `on_event`.
 #[tauri::command]
 fn start_engine(
     engines: State<'_, Engines>,
+    id: String,
     program: String,
     dir: String,
     on_event: Channel<EngineEvent>,
 ) -> Result<(), String> {
-    engines.start(&PathBuf::from(program), &PathBuf::from(dir), move |event| {
-        let _ = on_event.send(event);
-    })
+    engines.start(
+        &id,
+        &PathBuf::from(program),
+        &PathBuf::from(dir),
+        move |event| {
+            let _ = on_event.send(event);
+        },
+    )
 }
 
-/// Sends one line (a UCI command) to the running engine.
+/// Sends one line (a UCI command) to engine `id`.
 #[tauri::command]
-fn send_engine(engines: State<'_, Engines>, line: String) -> Result<(), String> {
-    engines.send(&line)
+fn send_engine(engines: State<'_, Engines>, id: String, line: String) -> Result<(), String> {
+    engines.send(&id, &line)
 }
 
 #[tauri::command]
-fn stop_engine(engines: State<'_, Engines>) -> Result<(), String> {
-    engines.stop();
+fn stop_engine(engines: State<'_, Engines>, id: String) -> Result<(), String> {
+    engines.stop(&id);
     Ok(())
 }
 
@@ -209,6 +228,7 @@ pub fn run() {
         .manage(Engines::default())
         .manage(Terminals::default())
         .manage(Tests::default())
+        .manage(tester::LogWatch::default())
         .invoke_handler(tauri::generate_handler![
             default_project_dir,
             write_project,
@@ -229,6 +249,8 @@ pub fn run() {
             run_bench,
             start_test,
             stop_test,
+            watch_games,
+            stop_watching,
             #[cfg(debug_assertions)]
             selftest::selftest_done
         ])

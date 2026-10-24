@@ -1,5 +1,6 @@
 //! Building an engine with cargo and running it.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -133,20 +134,22 @@ struct Running {
     stdin: ChildStdin,
 }
 
-/// The engine the user is talking to (one at a time).
+/// The engines that are running, by id: the Run console ("console"), the
+/// Play tab ("white", "black"). Each can be started and stopped on its own.
 #[derive(Default)]
 pub struct Engines {
-    running: Mutex<Option<Running>>,
+    running: Mutex<HashMap<String, Running>>,
 }
 
 impl Engines {
     pub fn start(
         &self,
+        id: &str,
         program: &Path,
         dir: &Path,
         on_event: impl Fn(EngineEvent) + Send + Sync + 'static,
     ) -> Result<(), String> {
-        self.stop();
+        self.stop(id);
         let mut child = command(program)
             .current_dir(dir)
             .stdin(Stdio::piped())
@@ -177,40 +180,61 @@ impl Engines {
                 f(EngineEvent::Exit("The engine stopped.".into()));
             });
         }
-        *self.running.lock().unwrap() = Some(Running { child, stdin });
+        self.running
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), Running { child, stdin });
         Ok(())
     }
 
-    pub fn send(&self, line: &str) -> Result<(), String> {
+    pub fn send(&self, id: &str, line: &str) -> Result<(), String> {
         let mut guard = self.running.lock().unwrap();
         let running = guard
-            .as_mut()
+            .get_mut(id)
             .ok_or("The engine is not running. Click Run first.")?;
         writeln!(running.stdin, "{line}")
             .and_then(|_| running.stdin.flush())
             .map_err(|_| "The engine has stopped.".to_string())
     }
 
-    pub fn stop(&self) {
-        if let Some(mut r) = self.running.lock().unwrap().take() {
-            let _ = writeln!(r.stdin, "quit");
-            let _ = r.stdin.flush();
-            // Give it a moment to quit by itself, then make sure.
-            for _ in 0..20 {
-                if let Ok(Some(_)) = r.child.try_wait() {
-                    return;
-                }
-                thread::sleep(std::time::Duration::from_millis(10));
-            }
-            let _ = r.child.kill();
-            let _ = r.child.wait();
+    pub fn stop(&self, id: &str) {
+        let taken = self.running.lock().unwrap().remove(id);
+        if let Some(r) = taken {
+            quit(r);
+        }
+    }
+
+    pub fn stop_all(&self) {
+        let all: Vec<Running> = self
+            .running
+            .lock()
+            .unwrap()
+            .drain()
+            .map(|(_, r)| r)
+            .collect();
+        for r in all {
+            quit(r);
         }
     }
 }
 
+/// Asks the engine to quit, then makes sure.
+fn quit(mut r: Running) {
+    let _ = writeln!(r.stdin, "quit");
+    let _ = r.stdin.flush();
+    for _ in 0..20 {
+        if let Ok(Some(_)) = r.child.try_wait() {
+            return;
+        }
+        thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let _ = r.child.kill();
+    let _ = r.child.wait();
+}
+
 impl Drop for Engines {
     fn drop(&mut self) {
-        self.stop();
+        self.stop_all();
     }
 }
 
@@ -248,18 +272,22 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let engines = Engines::default();
         engines
-            .start(&script, dir.path(), move |e| tx.send(e).unwrap())
+            .start("a", &script, dir.path(), move |e| tx.send(e).unwrap())
             .unwrap();
-        engines.send("uci").unwrap();
+        engines.send("a", "uci").unwrap();
         assert_eq!(
             rx.recv_timeout(Duration::from_secs(5)).unwrap(),
             EngineEvent::Line("got uci".into())
         );
-        engines.stop();
+        assert!(
+            engines.send("b", "uci").is_err(),
+            "another id is not running"
+        );
+        engines.stop("a");
         assert!(matches!(
             rx.recv_timeout(Duration::from_secs(5)).unwrap(),
             EngineEvent::Exit(_)
         ));
-        assert!(engines.send("go").is_err());
+        assert!(engines.send("a", "go").is_err());
     }
 }

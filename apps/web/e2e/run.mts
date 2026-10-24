@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { starterWorkspace } from "@cfs/codegen";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const server = await createServer({ root, logLevel: "error", server: { port: 0 } });
@@ -27,7 +28,7 @@ let passed = 0;
 const pageErrors: string[] = [];
 
 async function newPage(init?: () => void): Promise<Page> {
-  const ctx = await browser.newContext({ viewport: { width: 1600, height: 2000 }, acceptDownloads: true });
+  const ctx = await browser.newContext({ viewport: { width: 1600, height: process.env.CFS_SHOTS ? 1000 : 2000 }, acceptDownloads: true });
   // tsx wraps named functions in __name(): define it so a function can be sent to the page.
   if (init) await ctx.addInitScript(`var __name = (f) => f; (${init.toString()})();`);
   // The tutorial offer would cover part of the canvas; its own test clears this.
@@ -65,8 +66,15 @@ function check(cond: unknown, message: string): asserts cond {
 
 // Helpers -------------------------------------------------------------------------------------
 
+/** Clicks an item of the ☰ menu. */
+const menu = async (p: Page, item: string) => {
+  await p.click("#menu-btn");
+  await p.click(`#menu ${item}`);
+};
 const template = async (p: Page, name: "starter" | "reference" | "empty") => {
-  await p.selectOption("#template", name);
+  await p.click("#menu-btn");
+  await p.click("#template-toggle");
+  await p.click(`#menu [data-template="${name}"]`);
   await p.waitForTimeout(700);
 };
 const openFile = async (p: Page, path: string) => {
@@ -525,7 +533,7 @@ await test("save and open a .cfs project with its blocks", async (p) => {
   await p.locator(".be-foot .btn.primary").click();
   await p.waitForTimeout(700);
   const dl = p.waitForEvent("download");
-  await p.click("#save");
+  await menu(p, "#save");
   const d = await dl;
   const path = join(mkdtempSync(join(tmpdir(), "cfs-")), "p.cfs");
   await d.saveAs(path);
@@ -622,7 +630,7 @@ await test("branches: clone, change, switch, keep, and they survive a reload and
   // Save the file with both branches.
   await p.keyboard.press("Escape");
   const dl = p.waitForEvent("download");
-  await p.click("#save");
+  await menu(p, "#save");
   const path = join(mkdtempSync(join(tmpdir(), "cfs-")), "b.cfs");
   await (await dl).saveAs(path);
   // Keep the branch: main gets its engine.
@@ -670,9 +678,12 @@ await test("on the website, Run and Terminal explain the desktop app", async (p)
 /** A fake desktop app: a pretend cargo and a pretend engine that answers UCI. */
 function desktopMock(): void {
   const calls: unknown[][] = [];
-  let onEvent: ((e: { kind: string; text: string }) => void) | null = null;
+  type OnEvent = ((e: { kind: string; text: string }) => void) | null;
+  const onEvent: OnEvent = null;
   let onTerm: ((d: string) => void) | null = null;
   const disk: Record<string, Uint8Array> = {};
+  const engines: Record<string, { cb: (e: { kind: string; text: string }) => void; moves: number }> = {};
+  let watchCb: ((lines: string[]) => void) | null = null;
   (window as unknown as { __calls: unknown[][] }).__calls = calls;
   (window as unknown as { __cfsDesktopMock: unknown }).__cfsDesktopMock = {
     defaultProjectDir: async (name: string) => `/data/engines/${name}`,
@@ -684,18 +695,30 @@ function desktopMock(): void {
       onLine("    Finished `release` profile [optimized] target(s)");
       return `${dir}/target/release/engine`;
     },
-    startEngine: async (program: string, _dir: string, cb: typeof onEvent) => {
-      calls.push(["start", program]);
-      onEvent = cb;
+    startEngine: async (id: string, program: string, _dir: string, cb: typeof onEvent) => {
+      calls.push(["start", program, id]);
+      engines[id] = { cb: cb!, moves: 0 };
     },
-    sendEngine: async (line: string) => {
-      calls.push(["send", line]);
-      const say = (t: string) => setTimeout(() => onEvent?.({ kind: "line", text: t }), 5);
+    sendEngine: async (id: string, line: string) => {
+      calls.push(["send", line, id]);
+      const e = engines[id];
+      if (!e) throw new Error("The engine is not running.");
+      const say = (t: string) => setTimeout(() => e.cb({ kind: "line", text: t }), 5);
       if (line === "uci") (say("id name Mock"), say("uciok"));
       else if (line === "isready") say("readyok");
-      else if (line.startsWith("go")) say("bestmove e2e4");
+      else if (line.startsWith("position")) e.moves = (line.split(" moves ")[1] ?? "").split(" ").filter(Boolean).length;
+      else if (line.startsWith("go")) {
+        // A scripted game: Scholar's mate.
+        const script = ["e2e4", "e7e5", "f1c4", "b8c6", "d1h5", "g8f6", "h5f7"];
+        const move = script[e.moves] ?? "e2e4";
+        say(`info depth 5 seldepth 7 score cp ${e.moves % 2 ? -20 : 25} nodes 12345 nps 500000 pv ${move}`);
+        setTimeout(() => e.cb({ kind: "line", text: `bestmove ${move}` }), 40);
+      }
     },
-    stopEngine: async () => void calls.push(["stop"]),
+    stopEngine: async (id: string) => {
+      calls.push(["stop", id]);
+      delete engines[id];
+    },
     openTerminal: async (dir: string, _c: number, _r: number, cb: (d: string) => void) => {
       calls.push(["term", dir]);
       onTerm = cb;
@@ -737,13 +760,34 @@ function desktopMock(): void {
         "Elo: 30.10 +/- 12.40, nElo: 40.00 +/- 15.00",
         "Games: 120, Wins: 50, Losses: 40, Draws: 30, Points: 65.0 (54.17 %)",
         "Ptnml(0-2): [5, 10, 20, 15, 10], WL/DD Ratio: 0.50",
+        "LLR: 1.20 (40.8%) (-2.94, 2.94) [0.00, 10.00]",
+        "Elo: 28.00 +/- 10.00, nElo: 38.00 +/- 13.00",
+        "Games: 200, Wins: 80, Losses: 64, Draws: 56, Points: 108.0 (54.00 %)",
+        "Ptnml(0-2): [8, 16, 34, 26, 16], WL/DD Ratio: 0.50",
         "LLR: 2.95 (100.2%) (-2.94, 2.94) [0.00, 10.00]",
         "SPRT ([0.00, 10.00]) completed - H1 was accepted",
       ];
-      lines.forEach((text, i) => setTimeout(() => cb({ kind: "line", text }), 50 * (i + 1)));
-      setTimeout(() => cb({ kind: "exit", text: "fastchess finished." }), 50 * (lines.length + 2));
+      lines.forEach((text, i) => setTimeout(() => cb({ kind: "line", text }), 250 * (i + 1)));
+      // With watching on, the engine log shows two games being played.
+      if (args.some((a) => a === "-log")) {
+        const log = (t: string, n: string, msg: string) => `[Engine] [t] <     ${t}>  ${n} <--- ${msg}`;
+        const steps = [
+          [log("1", "a", "position startpos moves e2e4 e7e5"), log("2", "b", "position startpos moves d2d4")],
+          [log("1", "a", "go wtime 9000 btime 9000 winc 100 binc 100"), log("1", "b", "position startpos moves e2e4 e7e5 g1f3")],
+        ];
+        steps.forEach((lines, i) => setTimeout(() => watchCb?.(lines), 100 + 150 * i));
+      }
+      setTimeout(() => cb({ kind: "exit", text: "fastchess finished." }), 250 * (lines.length + 2));
     },
     stopTest: async () => void calls.push(["stopTest"]),
+    watchGames: async (path: string, cb: (lines: string[]) => void) => {
+      calls.push(["watch", path]);
+      watchCb = cb;
+    },
+    stopWatching: async () => {
+      calls.push(["stopWatching"]);
+      watchCb = null;
+    },
     readFile: async (path: string) => {
       if (!disk[path]) throw new Error(`no file ${path}`);
       return disk[path];
@@ -796,13 +840,13 @@ await test("desktop: Run says what is missing, and the terminal opens in the eng
   check(term && String(term[1]).startsWith("/data/engines/"), JSON.stringify(term));
   check((await p.locator("#dock .xterm-rows").innerText()).includes("/data/engines/"), "terminal shows no prompt");
   // Web links open in the browser.
-  await p.click("#feedback-btn");
+  await menu(p, "#feedback-btn");
   check((await calls(p)).some((x) => x[0] === "url" && String(x[1]).includes("github.com")), "feedback link not opened in the browser");
 }, desktopMock);
 
 await test("desktop: Save writes the file, changes are saved to it, Open reads it back", async (p) => {
   await template(p, "starter");
-  await p.click("#save");
+  await menu(p, "#save");
   await p.waitForTimeout(300);
   check((await toast(p)).includes("/home/me/my-engine.cfs"), `toast: ${await toast(p)}`);
   await setEngineName(p, "Autosaved");
@@ -810,7 +854,7 @@ await test("desktop: Save writes the file, changes are saved to it, Open reads i
   const writes = (await calls(p)).filter((x) => x[0] === "writeFile");
   check(writes.length >= 2, `autosave: ${JSON.stringify(writes)}`);
   await template(p, "empty");
-  await p.click("#open");
+  await menu(p, "#open");
   await p.waitForTimeout(800);
   check((await engineName(p)) === "Autosaved", `opened: ${await engineName(p)}`);
   // Each branch runs in its own folder.
@@ -826,9 +870,13 @@ await test("desktop: Save writes the file, changes are saved to it, Open reads i
 
 await test("tests on the website: the timeline is there, running needs the desktop app", async (p) => {
   await p.click("#tests-btn");
-  await p.waitForSelector(".ts");
+  await p.waitForSelector(".tests-view .ts-page");
   check((await p.locator(".ts-new").innerText()).includes("desktop app"), "no desktop notice");
   check((await p.locator(".ts-timeline").innerText()).includes("No tests yet"), "timeline");
+  if (process.env.CFS_SHOTS) {
+    await p.click("#menu-btn");
+    await p.screenshot({ path: join(process.env.CFS_SHOTS, "menu.png"), clip: { x: 0, y: 0, width: 1600, height: 460 } });
+  }
 });
 
 await test("desktop: a test builds both branches, plays, passes, and Keep merges the branch", async (p) => {
@@ -842,18 +890,25 @@ await test("desktop: a test builds both branches, plays, passes, and Keep merges
   await p.click("#tests-btn");
   await p.waitForSelector(".ts-start");
   check((await p.locator(".ts-what").innerText()).includes("Engine name"), `what: ${await p.locator(".ts-what").innerText()}`);
+  check((await p.locator(".ts-preset").allInnerTexts()).join(",") === "VSTC,STC,LTC,STC Regression", "preset names");
   await p.locator('.ts-preset[data-preset="standard"]').click();
   await p.click(".ts-start");
+  // The output stays open while results come in (redraws keep it open).
+  await p.waitForSelector(".ts-run .ts-log summary");
+  await p.locator(".ts-run .ts-log summary").click();
   await p.waitForSelector(".ts-run .ts-badge.ts-passed", { timeout: 15000 });
+  check(await p.locator(".ts-run .ts-log").evaluate((d) => (d as HTMLDetailsElement).open), "the output closed during the test");
   const run = await p.locator(".ts-run").innerText();
-  check(run.includes("+30.1 ± 12.4") && run.includes("120"), `run: ${run.slice(0, 300)}`);
+  check(run.includes("+28.0 ± 10.0") && run.includes("200"), `run: ${run.slice(0, 300)}`);
   check(run.includes("40000 / 35000"), "bench numbers");
+  check((await p.locator(".ts-run .chart svg").count()) === 3, "Elo, LLR and pentanomial graphs");
+  check((await p.locator(".ts-run .chart-bar").count()) === 5, "five pentanomial bars");
   const c = await calls(p);
   check(c.some((x) => x[0] === "installFastchess") && c.some((x) => x[0] === "getBook" && x[1] === "UHO_4060_v2.epd"), "setup steps");
   const args = (c.find((x) => x[0] === "startTest")![2] as string[]).join(" ");
   check(args.includes("tc=10+0.1") && args.includes("elo1=5") && args.includes("file=/tools/books/UHO_4060_v2.epd"), args);
   check((c.filter((x) => x[0] === "build") as unknown[][]).length === 2, "both engines built");
-  if (process.env.CFS_SHOTS) await p.locator(".ts").screenshot({ path: join(process.env.CFS_SHOTS, "tests.png") });
+  if (process.env.CFS_SHOTS) await p.screenshot({ path: join(process.env.CFS_SHOTS, "tests.png") });
   // Keep it: the review opens, then main gets the branch.
   await p.click(".ts-keep");
   await p.waitForSelector(".br-review");
@@ -863,11 +918,161 @@ await test("desktop: a test builds both branches, plays, passes, and Keep merges
   await p.keyboard.press("Escape");
   await p.click("#tests-btn");
   const timeline = await p.locator(".ts-timeline").innerText();
-  check(timeline.includes("passed") && timeline.includes("kept") && timeline.includes("+30.1"), `timeline: ${timeline}`);
-  check((await p.locator(".ts-chart").count()) === 1, "no Elo chart");
-  await p.keyboard.press("Escape");
+  check(timeline.includes("passed") && timeline.includes("kept") && timeline.includes("+28.0"), `timeline: ${timeline}`);
+  check((await p.locator(".ts-elochart .chart-whisker").count()) > 0, "no Elo chart with error bars");
+  // The chart folds away, and stays folded.
+  await p.locator(".ts-elochart summary").click();
+  check(!(await p.locator(".ts-elochart").evaluate((d) => (d as HTMLDetailsElement).open)), "chart did not fold");
+  // A past test opens on its own page: settings, graphs, and the code diff of that time.
+  await p.locator(".ts-item").first().click();
+  await p.waitForSelector(".ts-back");
+  const detail = await p.locator(".ts-run").innerText();
+  check(detail.includes("10+0.1") && detail.includes("UHO_4060_v2.epd") && detail.includes("[0, 5]"), `detail: ${detail.slice(0, 400)}`);
+  await p.locator(".ts-whatwas .br-code summary").click();
+  await p.waitForSelector(".ts-whatwas .cd-file");
+  check((await p.locator(".ts-whatwas .cd").innerText()).includes("Renamed"), "no diff of the tested code");
+  if (process.env.CFS_SHOTS) await p.screenshot({ path: join(process.env.CFS_SHOTS, "testdetail.png"), fullPage: true });
+  await p.click(".ts-back");
+  check(await p.locator("main.layout").isHidden(), "the editor shows behind the tests view");
+  await p.click("#engine-btn");
+  check(await p.locator("main.layout").isVisible(), "the editor did not come back");
   await p.click("#branch-btn");
   check((await p.locator(".br-history").innerText()).includes("Tested"), "no history line for the test");
+}, desktopMock);
+
+await test("desktop: the branches tutorial goes from the random mover to a tested, kept Negamax", async (p) => {
+  const next = async () => {
+    await p.waitForSelector(".tut-state.ok", { timeout: 15000 });
+    await p.locator('.tut [data-act="next"]').click();
+    await p.waitForTimeout(200);
+  };
+  const title = () => p.locator(".tut-title").innerText();
+  await menu(p, "#tutorial2-btn");
+  check((await title()).includes("Branches and tests"), await title());
+  await p.locator('.tut [data-act="action"]').click();
+  await next();
+  await p.click("#branch-btn");
+  await next();
+  await p.fill(".br-new input", "+ negamax");
+  await p.locator(".br-new button").click();
+  await next();
+  await p.keyboard.press("Escape");
+  // Steps 3 to 5: Negamax, an evaluation with Material, Iterative deepening.
+  const ws = starterWorkspace();
+  ws.eval.terms = [{ type: "material", params: {} }];
+  ws.search.slots.root = [{ type: "iterative_deepening", params: {} }];
+  await p.evaluate((w) => (window as unknown as { __cfsLoad(x: unknown): void }).__cfsLoad(w), ws);
+  for (let k = 0; k < 3; k++) await next();
+  check((await title()).includes("What changed"), await title());
+  await p.click("#branch-btn");
+  check((await p.locator(".br-item.current .br-changes").innerText()).includes("Negamax search"), "change list");
+  await next();
+  await p.keyboard.press("Escape");
+  await p.click("#tests-btn");
+  await next();
+  await p.locator('.ts-preset[data-preset="quick"]').click();
+  await p.click(".ts-start");
+  await next();
+  await next(); // passes
+  await p.click(".ts-keep");
+  await p.locator(".br .keep-confirm").click();
+  await next();
+  check((await title()).startsWith("Done"), await title());
+  await p.locator('.tut [data-act="next"]').click();
+  check((await p.locator(".tut").count()) === 0, "tutorial still open");
+}, desktopMock);
+
+/** Clicks a square of the Play board (White at the bottom unless flipped). */
+const clickSquare = async (p: Page, sq: string, flipped = false) => {
+  const box = (await p.locator(".pl-board cg-board").boundingBox())!;
+  const file = sq.charCodeAt(0) - 97;
+  const rank = Number(sq[1]) - 1;
+  const size = box.width / 8;
+  const x = flipped ? 7 - file : file;
+  const y = flipped ? rank : 7 - rank;
+  await p.mouse.click(box.x + (x + 0.5) * size, box.y + (y + 0.5) * size);
+  await p.waitForTimeout(120);
+};
+
+await test("play on the website explains the desktop app", async (p) => {
+  await p.click("#play-btn");
+  check((await p.locator(".pl-setup").innerText()).includes("desktop app"), "no desktop notice");
+  check((await p.locator(".pl-board cg-board").count()) === 1, "no board");
+  check(await p.locator("main.layout").isHidden(), "editor still visible");
+  await p.click("#engine-btn");
+  check(await p.locator("main.layout").isVisible(), "editor did not come back");
+});
+
+await test("desktop: play against your engine, take back, and finish with mate", async (p) => {
+  await template(p, "starter");
+  await p.click("#play-btn");
+  await p.locator('.pl-color [data-value="w"]').click();
+  await p.locator('.pl-timekind [data-value="depth"]').click();
+  await p.click(".pl-start");
+  await p.waitForSelector(".pl-game");
+  await p.waitForFunction(() => document.querySelector(".pl-status")?.textContent === "Your move");
+  await clickSquare(p, "e2");
+  await clickSquare(p, "e4");
+  await p.waitForFunction(() => document.querySelectorAll(".pl-san").length >= 2);
+  check((await p.locator(".pl-moves").innerText()).includes("e5"), `moves: ${await p.locator(".pl-moves").innerText()}`);
+  check((await p.locator(".pl-info").innerText()).includes("depth 5"), "no engine info");
+  // Take back: the engine's reply and your move are undone.
+  await p.click(".pl-takeback");
+  await p.waitForTimeout(300);
+  check((await p.locator(".pl-san").count()) === 0, `after take back: ${await p.locator(".pl-moves").innerText()}`);
+  for (const [a, b] of [["e2", "e4"], ["f1", "c4"], ["d1", "h5"], ["h5", "f7"]]) {
+    await p.waitForFunction(() => document.querySelector(".pl-status")?.textContent === "Your move", undefined, { timeout: 5000 }).catch(() => undefined);
+    await clickSquare(p, a!);
+    await clickSquare(p, b!);
+    await p.waitForTimeout(250);
+  }
+  await p.waitForSelector(".pl-status.pl-over");
+  check((await p.locator(".pl-status").innerText()).includes("White wins: checkmate"), await p.locator(".pl-status").innerText());
+  check((await p.locator(".pl-moves").innerText()).includes("Qxf7#"), "mate not in the moves");
+  check((await calls(p)).filter((x) => x[0] === "start" && x[2] === "black").length >= 1, "engine ran as black");
+  if (process.env.CFS_SHOTS) await p.screenshot({ path: join(process.env.CFS_SHOTS, "play.png") });
+}, desktopMock);
+
+await test("desktop: two branches play each other, with clocks", async (p) => {
+  await template(p, "starter");
+  await p.click("#branch-btn");
+  await p.fill(".br-new input", "other");
+  await p.locator(".br-new button").click();
+  await p.keyboard.press("Escape");
+  await p.click("#play-btn");
+  await p.locator('.pl-mode [data-value="engines"]').click();
+  await p.locator('.pl-timekind [data-value="clock"]').click();
+  await p.selectOption(".pl-white", "main");
+  await p.selectOption(".pl-black", "other");
+  await p.click(".pl-start");
+  await p.waitForSelector(".pl-status.pl-over", { timeout: 10000 });
+  check((await p.locator(".pl-status").innerText()).includes("checkmate"), await p.locator(".pl-status").innerText());
+  check(/\d:\d\d/.test(await p.locator(".pl-top .pl-clock").innerText()), "no clock");
+  const c = await calls(p);
+  check(c.some((x) => x[0] === "send" && String(x[1]).startsWith("go wtime")), "no clock times sent");
+  check(c.filter((x) => x[0] === "build").length === 2, "both branches built");
+}, desktopMock);
+
+await test("desktop: watching a test shows its games on boards", async (p) => {
+  await template(p, "starter");
+  await p.click("#branch-btn");
+  await p.fill(".br-new input", "watched");
+  await p.locator(".br-new button").click();
+  await p.keyboard.press("Escape");
+  await p.click("#tests-btn");
+  await p.locator(".ts-watch input").check();
+  check((await p.locator(".ts-watchwarn").innerText()).includes("costs speed"), "no warning");
+  await p.click(".ts-start");
+  await p.waitForSelector(".lg-card", { timeout: 10000 });
+  await p.waitForFunction(() => document.querySelectorAll(".lg-card").length === 2);
+  await p.waitForTimeout(400);
+  check((await p.locator(".lg-card").first().innerText()).includes("move 2"), await p.locator(".lg-card").first().innerText());
+  check((await p.locator(".lg-card piece").count()) > 50, "no pieces on the boards");
+  const args = ((await calls(p)).find((x) => x[0] === "startTest")![2] as string[]).join(" ");
+  check(args.includes("-log file=") && args.includes("engine=true"), args);
+  await p.waitForSelector(".ts-run .ts-badge.ts-passed", { timeout: 15000 });
+  check((await calls(p)).some((x) => x[0] === "stopWatching"), "watching not stopped");
+  if (process.env.CFS_SHOTS) await p.screenshot({ path: join(process.env.CFS_SHOTS, "live.png") });
 }, desktopMock);
 
 await test("the guide shows its pages and links between them", async (p) => {

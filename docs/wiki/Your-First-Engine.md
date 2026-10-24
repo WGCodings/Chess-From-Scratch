@@ -2,7 +2,7 @@
 
 In this page you build the simplest engine there is: one that plays a random legal move. It is a weak player, but it is a real engine. Every engine you make after this one should beat it.
 
-The app has the same steps built in. Click **Tutorial** at the top and it checks each step for you.
+The app has the same steps built in. Click **☰ > Tutorial: your first engine** (top left) and it checks each step for you. When you are done, **Tutorial: branches and tests** continues from your random mover.
 
 ## 1. Start with an empty canvas
 
@@ -60,7 +60,7 @@ You have two choices.
 
 **Export (works everywhere).** Click **Export Rust project**. You get a zip file. Unzip it somewhere.
 
-**Link folder (Chrome and Edge).** Click **Link folder** and pick an empty folder. The app writes the project there and keeps it up to date. Open that folder in VS Code with *File > Open Folder*. See [Coding in VS Code](Coding-In-VS-Code).
+**Link folder (Chrome and Edge).** Click **Link folder** in the **☰** menu and pick an empty folder. The app writes the project there and keeps it up to date. Open that folder in VS Code with *File > Open Folder*. See [Coding in VS Code](Coding-In-VS-Code).
 
 ## 6. Install Rust (only once)
 

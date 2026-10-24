@@ -1,3 +1,5 @@
+import type { Workspace } from "./workspace";
+
 /**
  * Engine tests: two branches of a workbench play many fast games with
  * fastchess until an SPRT says the new one is better (H1) or not (H0).
@@ -35,23 +37,23 @@ export type PresetId = "quick" | "standard" | "careful" | "nonregression";
 
 export const PRESETS: Record<PresetId, { label: string; description: string; options: Partial<TestOptions> }> = {
   quick: {
-    label: "Quick test",
-    description: "5+0.05 seconds a game, bounds [0, 10]: finds big gains fast. Good for a new block.",
+    label: "VSTC",
+    description: "Very short time control: 5+0.05 seconds a game, bounds [0, 10]. Finds big gains fast; good for a new block.",
     options: { tc: "5+0.05", sprt: { elo0: 0, elo1: 10, alpha: 0.05, beta: 0.05 } },
   },
   standard: {
-    label: "Standard test",
-    description: "10+0.1 seconds a game, bounds [0, 5]: like OpenBench's short time control.",
+    label: "STC",
+    description: "Short time control: 10+0.1 seconds a game, bounds [0, 5], like OpenBench's STC.",
     options: { tc: "10+0.1", sprt: { elo0: 0, elo1: 5, alpha: 0.05, beta: 0.05 } },
   },
   careful: {
-    label: "Careful test",
-    description: "60+0.6 seconds a game, bounds [0, 5]: long games, for changes that only help with more time.",
+    label: "LTC",
+    description: "Long time control: 60+0.6 seconds a game, bounds [0, 5]. For changes that only help with more time.",
     options: { tc: "60+0.6", sprt: { elo0: 0, elo1: 5, alpha: 0.05, beta: 0.05 } },
   },
   nonregression: {
-    label: "Not worse (simplification)",
-    description: "10+0.1 seconds a game, bounds [-5, 0]: passes when the new version is not weaker, e.g. after cleaning up code.",
+    label: "STC Regression",
+    description: "Non-regression at STC: 10+0.1 seconds a game, bounds [-5, 0]. Passes when the new version is not weaker, e.g. after cleaning up code.",
     options: { tc: "10+0.1", sprt: { elo0: -5, elo1: 0, alpha: 0.05, beta: 0.05 } },
   },
 };
@@ -115,7 +117,14 @@ export interface TestEngine {
 }
 
 /** fastchess's arguments for a test of `next` against `base`. */
-export function fastchessArgs(o: TestOptions, next: TestEngine, base: TestEngine, book: { path: string; format: "epd" | "pgn" } | null): string[] {
+export function fastchessArgs(
+  o: TestOptions,
+  next: TestEngine,
+  base: TestEngine,
+  book: { path: string; format: "epd" | "pgn" } | null,
+  /** Write every engine message to this file, to watch the games live (costs some speed). */
+  liveLog?: string,
+): string[] {
   const engine = (e: TestEngine) => [
     "-engine",
     `cmd=${e.program}`,
@@ -144,6 +153,7 @@ export function fastchessArgs(o: TestOptions, next: TestEngine, base: TestEngine
   ];
   if (book) args.push("-openings", `file=${book.path}`, `format=${book.format}`, "order=random");
   if (o.adjudicate) args.push("-draw", "movenumber=40", "movecount=8", "score=10", "-resign", "movecount=3", "score=600", "twosided=true");
+  if (liveLog) args.push("-log", `file=${liveLog}`, "level=info", "engine=true", "realtime=true", "append=false");
   return args;
 }
 
@@ -170,11 +180,22 @@ export interface TestProgress {
   problems: number;
   /** The last finished games, newest last. */
   recent: string[];
+  /** Elo and LLR as the games went by, for the graphs (thinned out on long tests). */
+  samples?: TestSample[];
 }
+
+export interface TestSample {
+  games: number;
+  elo: number | null;
+  error: number | null;
+  llr: number | null;
+}
+
+const MAX_SAMPLES = 400;
 
 export function emptyProgress(s: SprtBounds): TestProgress {
   const { lower, upper } = sprtLimits(s);
-  return { games: 0, wins: 0, losses: 0, draws: 0, elo: null, eloError: null, nElo: null, nEloError: null, penta: null, llr: null, lower, upper, verdict: null, problems: 0, recent: [] };
+  return { games: 0, wins: 0, losses: 0, draws: 0, elo: null, eloError: null, nElo: null, nEloError: null, penta: null, llr: null, lower, upper, verdict: null, problems: 0, recent: [], samples: [] };
 }
 
 const num = (s: string | undefined) => (s === undefined ? null : Number(s));
@@ -209,6 +230,14 @@ export function readFastchessLine(p: TestProgress, line: string, newName: string
     p.llr = num(m[1]);
     p.lower = Number(m[2]);
     p.upper = Number(m[3]);
+    // The LLR line ends a result block: remember this point for the graphs.
+    const samples = (p.samples ??= []);
+    const last = samples[samples.length - 1];
+    const point = { games: p.games, elo: p.elo, error: p.eloError, llr: p.llr };
+    if (last && last.games === p.games) samples[samples.length - 1] = point;
+    else samples.push(point);
+    // Long tests keep every other point, so a saved test stays small.
+    if (samples.length > MAX_SAMPLES) p.samples = samples.filter((_, i) => i % 2 === 0 || i === samples.length - 1);
     return true;
   }
   if ((m = line.match(/SPRT \(.*\) completed - (H0|H1) was accepted/))) {
@@ -247,6 +276,9 @@ export interface TestRecord {
   message?: string;
   /** What the user did afterwards. */
   decision?: "kept" | "deleted";
+  /** Both engines as they were tested, to show their code diff later. */
+  newWorkspace?: Workspace;
+  baseWorkspace?: Workspace;
 }
 
 /** The status a finished fastchess run means. */
@@ -274,14 +306,17 @@ export function describeResult(t: TestRecord): string {
  * The main version's strength over time: every test whose new branch was
  * kept adds its Elo. Points start at 0 with the first test.
  */
-export function eloTimeline(tests: TestRecord[]): { at: string; elo: number; label: string }[] {
-  const points: { at: string; elo: number; label: string }[] = [];
+export function eloTimeline(tests: TestRecord[]): { at: string; elo: number; error: number; label: string }[] {
+  const points: { at: string; elo: number; error: number; label: string }[] = [];
   let total = 0;
+  let variance = 0;
   for (const t of [...tests].sort((a, b) => a.started.localeCompare(b.started))) {
     if (t.decision !== "kept" || t.result.elo === null) continue;
-    if (!points.length) points.push({ at: t.started, elo: 0, label: "start" });
+    if (!points.length) points.push({ at: t.started, elo: 0, error: 0, label: "start" });
     total += t.result.elo;
-    points.push({ at: t.finished ?? t.started, elo: total, label: t.newBranch.name });
+    // Errors of independent tests add up as the root of the sum of squares.
+    variance += (t.result.eloError ?? 0) ** 2;
+    points.push({ at: t.finished ?? t.started, elo: total, error: Math.sqrt(variance), label: t.newBranch.name });
   }
   return points;
 }

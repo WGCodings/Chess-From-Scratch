@@ -310,9 +310,87 @@ impl Drop for Tests {
     }
 }
 
+/// Follows a growing log file (fastchess's engine log) and passes on the
+/// lines that show the games: positions sent to the engines, the clocks and
+/// their moves. Watching costs some speed, so it only runs when asked.
+#[derive(Default)]
+pub struct LogWatch {
+    stop: Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+}
+
+/// The lines of a fastchess engine log that matter for showing games.
+pub fn is_game_line(line: &str) -> bool {
+    line.contains("<--- position ") || line.contains("<--- go ") || line.contains("---> bestmove ")
+}
+
+impl LogWatch {
+    pub fn start(&self, path: PathBuf, on_lines: impl Fn(Vec<String>) + Send + 'static) {
+        self.stop();
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        *self.stop.lock().unwrap() = Some(flag.clone());
+        thread::spawn(move || {
+            use std::io::{Seek, SeekFrom};
+            use std::sync::atomic::Ordering;
+            let mut offset = 0u64;
+            let mut partial = String::new();
+            while !flag.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_millis(150));
+                let Ok(mut f) = std::fs::File::open(&path) else {
+                    continue;
+                };
+                let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+                if len < offset {
+                    // The file was started again.
+                    offset = 0;
+                    partial.clear();
+                }
+                if len == offset || f.seek(SeekFrom::Start(offset)).is_err() {
+                    continue;
+                }
+                let mut buf = Vec::new();
+                if f.take(4 * 1024 * 1024).read_to_end(&mut buf).is_err() {
+                    continue;
+                }
+                offset += buf.len() as u64;
+                partial.push_str(&String::from_utf8_lossy(&buf));
+                let mut lines = Vec::new();
+                while let Some(i) = partial.find('\n') {
+                    let line: String = partial.drain(..=i).collect();
+                    if is_game_line(&line) {
+                        lines.push(line.trim_end().to_string());
+                    }
+                }
+                if !lines.is_empty() {
+                    on_lines(lines);
+                }
+            }
+        });
+    }
+
+    pub fn stop(&self) {
+        if let Some(f) = self.stop.lock().unwrap().take() {
+            f.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn follows_a_growing_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live.log");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let watch = LogWatch::default();
+        watch.start(path.clone(), move |l| tx.send(l).unwrap());
+        std::fs::write(&path, "[Engine] [t] <  1>  a <--- position startpos moves e2e4\n[Engine] [t] <  1>  a ---> info depth 1\n").unwrap();
+        let got = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(got.len(), 1);
+        assert!(got[0].ends_with("moves e2e4"));
+        watch.stop();
+    }
 
     #[test]
     fn knows_the_download_for_this_computer() {

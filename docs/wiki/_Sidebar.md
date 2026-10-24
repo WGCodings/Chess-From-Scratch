@@ -16,6 +16,7 @@
 - [The desktop app](The-Desktop-App)
 - [Branches: try ideas safely](Branches)
 - [Testing your changes](Testing-Changes)
+- [Playing your engine](Playing-Your-Engine)
 - [Build, test and play](Build-Test-Play)
 - [Saving and sharing](Saving-And-Sharing)
 

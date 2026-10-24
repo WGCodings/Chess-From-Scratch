@@ -15,7 +15,7 @@ It needs another block first. Hover over it to see which one.
 It isn't connected to the Engine block, so it is ignored. Drag it into a slot.
 
 **I don't see the Tutorial offer.**
-It is only offered once. Click **Tutorial** at the top any time.
+It is only offered once. Open the **☰** menu any time: **Tutorial: your first engine**, or **Tutorial: branches and tests** for the next step.
 
 **My canvas is gone.**
 Your work is stored in this browser only. A different browser, a private window, or cleared browser data starts empty. Keep `.cfs` files of your projects.

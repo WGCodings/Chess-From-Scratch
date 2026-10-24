@@ -18,9 +18,10 @@ export interface Desktop {
   rustVersion(): Promise<string>;
   /** `cargo build --release`; resolves with the program's path. */
   buildEngine(dir: string, onLine: (line: string) => void): Promise<string>;
-  startEngine(program: string, dir: string, onEvent: (e: EngineEvent) => void): Promise<void>;
-  sendEngine(line: string): Promise<void>;
-  stopEngine(): Promise<void>;
+  /** Starts an engine under `id` ("console", "white", "black"), replacing one with that id. */
+  startEngine(id: string, program: string, dir: string, onEvent: (e: EngineEvent) => void): Promise<void>;
+  sendEngine(id: string, line: string): Promise<void>;
+  stopEngine(id: string): Promise<void>;
   openTerminal(dir: string, cols: number, rows: number, onData: (data: string) => void): Promise<number>;
   writeTerminal(id: number, data: string): Promise<void>;
   resizeTerminal(id: number, cols: number, rows: number): Promise<void>;
@@ -48,6 +49,9 @@ export interface Desktop {
   /** Starts fastchess; its output arrives on `onEvent`. */
   startTest(program: string, args: string[], dir: string, onEvent: (e: EngineEvent) => void): Promise<void>;
   stopTest(): Promise<void>;
+  /** Follows fastchess's engine log; the lines that show games arrive in batches. */
+  watchGames(path: string, onLines: (lines: string[]) => void): Promise<void>;
+  stopWatching(): Promise<void>;
   /** A yes/no question in a native dialog (window.confirm when absent). */
   ask?(message: string, title: string): Promise<boolean>;
 }
@@ -79,9 +83,9 @@ function tauriDesktop(): Desktop {
     writeProject: (dir, files) => call("write_project", { dir, files }),
     rustVersion: () => call("rust_version"),
     buildEngine: async (dir, onLine) => call("build_engine", { dir, onLine: await channel(onLine) }),
-    startEngine: async (program, dir, onEvent) => call("start_engine", { program, dir, onEvent: await channel(onEvent) }),
-    sendEngine: (line) => call("send_engine", { line }),
-    stopEngine: () => call("stop_engine"),
+    startEngine: async (id, program, dir, onEvent) => call("start_engine", { id, program, dir, onEvent: await channel(onEvent) }),
+    sendEngine: (id, line) => call("send_engine", { id, line }),
+    stopEngine: (id) => call("stop_engine", { id }),
     openTerminal: async (dir, cols, rows, onData) => call("open_terminal", { dir, cols, rows, onData: await channel(onData) }),
     writeTerminal: (id, data) => call("write_terminal", { id, data }),
     resizeTerminal: (id, cols, rows) => call("resize_terminal", { id, cols, rows }),
@@ -101,6 +105,8 @@ function tauriDesktop(): Desktop {
     runBench: (program) => call("run_bench", { program }),
     startTest: async (program, args, dir, onEvent) => call("start_test", { program, args, dir, onEvent: await channel(onEvent) }),
     stopTest: () => call("stop_test"),
+    watchGames: async (path, onLines) => call("watch_games", { path, onLines: await channel(onLines) }),
+    stopWatching: () => call("stop_watching"),
     ask: async (message, title) => (await import("@tauri-apps/plugin-dialog")).ask(message, { title, kind: "warning" }),
     pickFolder: async (title) => {
       const picked = await (await import("@tauri-apps/plugin-dialog")).open({ directory: true, title });

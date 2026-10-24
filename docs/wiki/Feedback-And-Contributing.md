@@ -4,7 +4,7 @@ Chess From Scratch is new, and it gets better with every bit of feedback. If som
 
 ## Tell us what you think
 
-Click **Feedback** at the top of the app, or go to the [issues page on GitHub](https://github.com/WGCodings/Chess-From-Scratch/issues), and click **New issue**. You need a free GitHub account.
+Click **Feedback** in the app's **☰** menu, or go to the [issues page on GitHub](https://github.com/WGCodings/Chess-From-Scratch/issues), and click **New issue**. You need a free GitHub account.
 
 A few lines are enough:
 

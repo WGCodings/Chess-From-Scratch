@@ -52,7 +52,7 @@ Status tells you if your engine is ready.
 
 ## Templates
 
-**New** at the top gives you a start:
+**☰ > New from template…** (top left) gives you a start:
 
 - **Empty**: just the Engine block. Nothing else.
 - **Starter engine**: Negamax search and an empty evaluation. Add blocks yourself.

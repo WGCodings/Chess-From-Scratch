@@ -4,6 +4,8 @@ A branch is a copy of your engine where you try an idea. If the idea works, you 
 
 Click **⑂ main** at the top to open the Branches panel.
 
+The app has a tutorial for this: **☰ > Tutorial: branches and tests**. It starts from a random mover, makes a branch with Negamax and Material, tests it and keeps it.
+
 ## Try an idea
 
 1. Type a name for the idea, for example `+ killers` or `LMR base 0.8`.

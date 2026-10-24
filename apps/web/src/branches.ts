@@ -19,6 +19,7 @@ import {
 } from "@cfs/codegen";
 import { confirmAction } from "./platform";
 import { diffText, renderDiff, workspaceDiff } from "./codediff";
+import { preserving } from "./ui";
 import type { Workspace } from "@cfs/codegen";
 
 export interface BranchHost {
@@ -157,8 +158,9 @@ export class BranchPanel {
   }
 
   /** A collapsed "Code changes" section; the diff is made when it is opened. */
-  private codeSection(before: Workspace, after: Workspace, label: string, open = false): HTMLElement {
+  private codeSection(before: Workspace, after: Workspace, label: string, open = false, key?: string): HTMLElement {
     const d = el("details", "br-code");
+    if (key) d.dataset.key = key;
     const sum = el("summary", undefined, label);
     d.append(sum);
     const fill = () => {
@@ -218,7 +220,7 @@ export class BranchPanel {
       for (const line of changes) ul.append(el("li", undefined, line));
       review.append(ul);
     }
-    review.append(this.codeSection(main.workspace, b.workspace, "Code changes", true));
+    review.append(this.codeSection(main.workspace, b.workspace, "Code changes", true, `review-${id}`));
     const foot = el("div", "br-foot");
     const ok = button("Keep it", `Make "${b.name}" the main version`, "btn primary keep-confirm");
     ok.addEventListener("click", () => {
@@ -239,6 +241,11 @@ export class BranchPanel {
   }
 
   private render(): void {
+    // Redraws (a running test saves often) keep open code changes open.
+    preserving(this.body, () => this.draw());
+  }
+
+  private draw(): void {
     const wb = this.host.workbench();
     if (this.reviewing && wb.branches[this.reviewing]) {
       this.body.replaceChildren();
@@ -348,7 +355,7 @@ export class BranchPanel {
         for (const line of describeChanges(changes)) ul.append(el("li", undefined, line));
         li.append(ul);
       }
-      if (b.id !== wb.main && b.base && changes.length) li.append(this.codeSection(b.base, b.workspace, "Code changes"));
+      if (b.id !== wb.main && b.base && changes.length) li.append(this.codeSection(b.base, b.workspace, "Code changes", false, `code-${b.id}`));
       list.append(li);
     }
     this.body.append(list);
@@ -359,6 +366,7 @@ export class BranchPanel {
     // History, newest first.
     if (wb.history.length) {
       const h = el("details", "br-history");
+      h.dataset.key = "history";
       h.open = wb.history.length <= 8;
       h.append(el("summary", undefined, `History (${wb.history.length})`));
       const ul = el("ul");

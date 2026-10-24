@@ -30,6 +30,9 @@ describe("fastchess", () => {
     expect(s).toContain("-openings file=/b/UHO.epd format=epd order=random");
     expect(s).toContain("-rounds 10000 -repeat");
     expect(args).toContain("cmd=/e/new"); // one argument each: paths with spaces stay whole
+    expect(args.join(" ")).not.toContain("-log");
+    const live = fastchessArgs(o, { name: "new", program: "/e/new", hash: true }, { name: "base", program: "/e/base", hash: false }, null, "/t/live.log");
+    expect(live.join(" ")).toContain("-log file=/t/live.log level=info engine=true realtime=true append=false");
   });
 
   it("reads results, the LLR and finished games from its output", () => {
@@ -37,6 +40,7 @@ describe("fastchess", () => {
     for (const line of OUTPUT.split("\n")) readFastchessLine(p, line, "new");
     expect(p).toMatchObject({ games: 24, wins: 5, losses: 9, draws: 10, elo: -58.45, eloError: 124.68, nElo: -69.49, llr: -0.08, lower: -2.94, upper: 2.94, verdict: null });
     expect(p.penta).toEqual([3, 2, 3, 4, 0]);
+    expect(p.samples!.map((x) => [x.games, x.llr])).toEqual([[20, -0.06], [24, -0.08]]);
     expect(p.recent).toHaveLength(8);
     expect(p.recent.at(-1)).toContain("draw");
     expect(statusOf(p)).toBe("stopped");
@@ -77,7 +81,7 @@ describe("tests in the workbench", () => {
     keepBranch(wb, a);
     deleteBranch(wb, b);
     expect(wb.tests!.map((t) => t.decision)).toEqual(["kept", "deleted"]);
-    expect(eloTimeline(wb.tests!).map((p) => [p.label, p.elo])).toEqual([["start", 0], ["+ killers", 25]]);
+    expect(eloTimeline(wb.tests!).map((p) => [p.label, p.elo, p.error])).toEqual([["start", 0, 0], ["+ killers", 25, 10]]);
   });
 
   it("a test still running when the app closed reads back as stopped", () => {

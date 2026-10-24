@@ -39,7 +39,9 @@ offline. Download it from the
 - Try ideas in branches: clone your engine, change it, see exactly what
   changed, then keep it or delete it.
 - Test a branch against your main version with SPRT (fastchess, in the
-  desktop app) and follow your engine's Elo over time.
+  desktop app), watch the games live, and follow your engine's Elo over time.
+- Play against any branch of your engine on a board, or let two branches
+  play each other.
 - Write code in VS Code: link a folder and your changes come back as blocks.
 - Export a complete Rust project with a `bench` command, ready for
   [fastchess](https://github.com/Disservin/fastchess) and
@@ -49,7 +51,7 @@ offline. Download it from the
 
 The **[guide](https://github.com/WGCodings/Chess-From-Scratch/wiki)** explains
 everything in simple steps: your first engine, the blocks, changing and making
-blocks, building and testing. It is also in the app (**Guide** at the top).
+blocks, building and testing. It is also in the app (**Guide** in the **☰** menu).
 
 ## Feedback
 
@@ -71,4 +73,6 @@ Then open http://localhost:5173. To host it, see [deploy/README.md](deploy/READM
 
 The app is open source under the [GNU AGPL v3](LICENSE). The Rust code that
 ends up in your engine (the templates and example blocks) is MIT licensed, and
-every exported engine comes with an MIT license in your name.
+every exported engine comes with an MIT license in your name. The board is
+[chessground](https://github.com/lichess-org/chessground) (GPL-3.0) and the
+chess rules come from [chess.js](https://github.com/jhlywa/chess.js) (BSD-2-Clause).

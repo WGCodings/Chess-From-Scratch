@@ -8,29 +8,41 @@
   </head>
   <body>
     <header class="topbar">
-      <div class="brand">
-        <img src="/favicon.svg" alt="" width="24" height="24" />
-        <span class="logo">Chess From Scratch</span>
+      <div class="left">
+        <div class="menu-wrap">
+          <button id="menu-btn" class="btn menu-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="menu" title="Menu: new, open, save, guide, tutorial">☰</button>
+          <nav id="menu" class="menu" hidden aria-label="Menu">
+            <button id="open" class="menu-item" type="button" title="Open a .cfs project, a workspace.json or a .block.rs block file">Open…</button>
+            <button id="template-toggle" class="menu-item has-sub" type="button" aria-expanded="false" aria-controls="template-list" title="Start a new engine from a template (replaces the current one; it asks first)">New from template…</button>
+            <div id="template-list" class="menu-sub" hidden>
+              <button type="button" class="menu-item" data-template="empty">Empty (just the engine)</button>
+              <button type="button" class="menu-item" data-template="starter">Starter engine (negamax + evaluation)</button>
+              <button type="button" class="menu-item" data-template="reference">Every block</button>
+            </div>
+            <hr />
+            <button id="save" class="menu-item" type="button" title="Save the project, with all its branches, tests and blocks, as a .cfs file">Save</button>
+            <button id="save-as" class="menu-item" type="button" hidden title="Save the project to another file">Save as…</button>
+            <button id="link-folder" class="menu-item" type="button" hidden title="Write the project into a folder on your computer and keep it in sync, to edit it in VS Code or any editor">Link folder</button>
+            <hr />
+            <button id="tutorial-btn" class="menu-item" type="button" title="A guided tour: build, read, compile and play your first engine">Tutorial: your first engine</button>
+            <button id="tutorial2-btn" class="menu-item" type="button" title="From the random mover to a tested, stronger engine: branches and tests">Tutorial: branches and tests</button>
+            <a id="guide-btn" class="menu-item" href="guide.html#Home" target="_blank" rel="noopener" title="How to build, change and make blocks, in simple steps">Guide</a>
+            <a id="feedback-btn" class="menu-item" href="https://github.com/WGCodings/Chess-From-Scratch/issues" target="_blank" rel="noopener" title="Report a bug or share an idea (GitHub issues)">Feedback</a>
+          </nav>
+        </div>
+        <div class="brand">
+          <img src="/favicon.svg" alt="" width="24" height="24" />
+          <span class="logo">Chess From Scratch</span>
+        </div>
+        <div class="views" role="tablist" aria-label="View">
+          <button id="engine-btn" class="view-tab active" type="button" role="tab" aria-selected="true" title="Build your engine with blocks">Engine</button>
+          <button id="tests-btn" class="view-tab" type="button" role="tab" aria-selected="false" title="Test two branches against each other (SPRT with fastchess) and see every test so far">Tests</button>
+          <button id="play-btn" class="view-tab" type="button" role="tab" aria-selected="false" title="Play against a branch of your engine, or let two branches play">Play</button>
+        </div>
       </div>
       <div class="actions">
-        <label class="select">
-          <span>New</span>
-          <select id="template" aria-label="Start a new engine from a template">
-            <option value="" selected disabled>from template…</option>
-            <option value="empty">Empty (just the engine)</option>
-            <option value="starter">Starter engine (negamax + evaluation)</option>
-            <option value="reference">Every block</option>
-          </select>
-        </label>
-        <button id="branch-btn" class="btn branch" type="button">⑂ main</button>
-        <button id="tests-btn" class="btn" type="button" title="Test two branches against each other (SPRT with fastchess) and see every test so far">Tests</button>
-        <a id="feedback-btn" class="btn" href="https://github.com/WGCodings/Chess-From-Scratch/issues" target="_blank" rel="noopener" title="Report a bug or share an idea (GitHub issues)">Feedback</a>
-        <a id="guide-btn" class="btn" href="guide.html#Home" target="_blank" rel="noopener" title="How to build, change and make blocks, in simple steps">Guide</a>
-        <button id="tutorial-btn" class="btn" type="button" title="A guided tour: build, read, compile and play your first engine">Tutorial</button>
-        <button id="open" class="btn" type="button" title="Open a .cfs project, a workspace.json or a .block.rs block file">Open</button>
-        <button id="save" class="btn" type="button" title="Save the project, with all its branches and blocks, as a .cfs file (Shift-click: save as)">Save</button>
-        <button id="link-folder" class="btn" type="button" hidden title="Write the project into a folder on your computer and keep it in sync, to edit it in VS Code or any editor">Link folder</button>
         <span id="folder-status" class="folder-status" hidden></span>
+        <button id="branch-btn" class="btn branch" type="button">⑂ main</button>
         <button id="terminal-btn" class="btn" type="button" title="A terminal in your engine's folder (desktop app)">Terminal</button>
         <button id="run-btn" class="btn run" type="button" title="Build your engine and talk to it: uci, go, bench… (desktop app)">▶ Run</button>
         <button id="export" class="btn primary" type="button">Export Rust project</button>
@@ -67,6 +79,9 @@
         </section>
       </aside>
     </main>
+
+    <main id="tests-view" hidden aria-label="Tests"></main>
+    <main id="play-view" hidden aria-label="Play"></main>
 
     <section id="dock" hidden aria-label="Run and terminal"></section>
 

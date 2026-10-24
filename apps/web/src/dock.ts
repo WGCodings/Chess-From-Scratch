@@ -238,7 +238,7 @@ export class Dock {
       this.setStatus("Building…");
       const program = await desktop.buildEngine(dir, (l) => this.print(l, "build"));
       this.print("Built. Starting the engine…", "note");
-      await desktop.startEngine(program, dir, (e) => this.onEngine(e));
+      await desktop.startEngine("console", program, dir, (e) => this.onEngine(e));
       this.running = true;
       await this.send("uci");
       this.input.focus();
@@ -252,7 +252,7 @@ export class Dock {
 
   async stop(): Promise<void> {
     if (!desktop || !this.running) return;
-    await desktop.stopEngine();
+    await desktop.stopEngine("console");
     this.running = false;
     this.update();
   }
@@ -274,7 +274,7 @@ export class Dock {
     }
     this.historyAt = -1;
     try {
-      await desktop.sendEngine(cmd);
+      await desktop.sendEngine("console", cmd);
     } catch (err) {
       this.print(String(err), "error");
       this.running = false;

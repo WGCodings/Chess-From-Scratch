@@ -16,9 +16,8 @@
   const outputHas = (text) => [...document.querySelectorAll("#dock .dock-output div")].some((d) => d.textContent.includes(text));
   try {
     await waitFor("the editor", () => document.querySelector(".blocklyToolboxCategory"), 30);
-    const select = document.querySelector("#template");
-    select.value = "starter";
-    select.dispatchEvent(new Event("change"));
+    document.querySelector("#template-toggle").click();
+    document.querySelector('#menu [data-template="starter"]').click();
     await sleep(800);
     document.querySelector("#run-btn").click();
     await waitFor("uciok (build and start)", () => outputHas("uciok") || outputHas("build failed"), 600);
@@ -42,6 +41,7 @@
     if (back.join(",") !== "1,2,3,250") throw new Error(`read_file gave ${back.join(",")}`);
     log.push("write_file/read_file round trip");
     // A real test: fastchess and a book are downloaded, both branches built, a few games played.
+    localStorage.setItem("cfs.test.watch", "1");
     localStorage.setItem("cfs.test.options", JSON.stringify({ tc: "1+0.01", concurrency: 1, maxGames: 4, book: { kind: "builtin", id: "8moves_v3" } }));
     document.querySelector("#branch-btn").click();
     await sleep(300);
@@ -57,6 +57,18 @@
     const badge = document.querySelector(".ts-run .ts-badge").textContent;
     log.push(`test: ${badge}; ${runText.replace(/\s+/g, " ").slice(0, 160)}`);
     if (!/4\s*games/.test(runText)) throw new Error(`the test did not play 4 games: ${document.querySelector(".ts-out")?.textContent.slice(-600)}`);
+    const boards = document.querySelectorAll(".lg-card").length;
+    if (!boards) throw new Error("watching the test showed no boards");
+    log.push(`live boards: ${boards}`);
+    // Play: two branches against each other, a few moves at depth 2.
+    localStorage.setItem("cfs.play.setup", JSON.stringify({ mode: "engines", time: { kind: "depth", depth: 2 }, fen: "" }));
+    document.querySelector("#play-btn").click();
+    await waitFor("the play form", () => document.querySelector(".pl-start"), 10);
+    document.querySelector(".pl-start").click();
+    await waitFor("six moves on the board", () => document.querySelectorAll(".pl-san").length >= 6 || document.querySelector(".pl-status.pl-over"), 300);
+    log.push(`play: ${document.querySelector(".pl-moves").textContent.replace(/\s+/g, " ").slice(0, 80)}`);
+    log.push(`engine info: ${document.querySelector(".pl-info")?.textContent.replace(/\s+/g, " ").slice(0, 80)}`);
+    document.querySelector(".pl-resign")?.click();
     log.push("--- engine output ---", ...[...document.querySelectorAll("#dock .dock-output div")].slice(-12).map((d) => d.textContent));
     await report(true);
   } catch (err) {

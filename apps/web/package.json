@@ -35,6 +35,8 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "blockly": "^13.4.0",
+    "chess.js": "^1.4.0",
+    "chessground": "^9.2.1",
     "codemirror": "^6.0.2",
     "fflate": "^0.8.3",
     "marked": "^14.1.4"

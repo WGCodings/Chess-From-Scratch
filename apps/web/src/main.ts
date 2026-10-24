@@ -81,6 +81,7 @@ import { installDesktopLinks } from "./links";
 import { confirmAction, desktop, isDesktop } from "./platform";
 import { BranchPanel } from "./branches";
 import { TestsPanel, projectName } from "./tests";
+import { PlayView } from "./play";
 import "./style.css";
 
 const STORAGE_KEY = "cfs.blockly.v2";
@@ -283,6 +284,7 @@ let current: Workspace | null = null;
 let wbench: Workbench = newWorkbench(emptyWorkspace());
 let branchPanel: BranchPanel | null = null;
 let testsPanel: TestsPanel | null = null;
+let playView: PlayView | null = null;
 let savePath: string | null = desktop ? readStored(SAVE_PATH_KEY) : null;
 
 function readStored(key: string): string | null {
@@ -1563,7 +1565,12 @@ if (canLinkFolders()) {
 }
 
 // For automated tests: link a folder handle without the picker (e.g. the origin private file system).
-Object.assign(window, { __cfsLinkFolder: (h: FileSystemDirectoryHandle) => linkFolder(h), __cfsWorkspace: bw });
+Object.assign(window, {
+  __cfsLinkFolder: (h: FileSystemDirectoryHandle) => linkFolder(h),
+  __cfsWorkspace: bw,
+  // Puts a workspace on the canvas of the open branch, as if built by hand.
+  __cfsLoad: (ws: Workspace) => load(normalizeWorkspace(ws)),
+});
 
 // Persistence ---------------------------------------------------------------
 
@@ -1722,10 +1729,48 @@ const TEMPLATES: Record<string, () => Workspace> = {
   reference: referenceWorkspace,
 };
 
-$<HTMLSelectElement>("template").addEventListener("change", (e) => {
-  const select = e.target as HTMLSelectElement;
-  const make = TEMPLATES[select.value];
-  select.value = "";
+// The ☰ menu: new, open, save, folder, tutorial, guide, feedback.
+const menuBtn = $<HTMLButtonElement>("menu-btn");
+const menu = $("menu");
+function setMenu(open: boolean): void {
+  menu.hidden = !open;
+  menuBtn.setAttribute("aria-expanded", String(open));
+  menuBtn.classList.toggle("open", open);
+}
+menuBtn.addEventListener("click", () => setMenu(menu.hidden !== false));
+// Picking an item closes the menu; so does a click elsewhere or Escape.
+menu.addEventListener("click", (e) => {
+  const item = (e.target as Element).closest(".menu-item");
+  if (item && item.id !== "template-toggle") setMenu(false);
+});
+document.addEventListener("mousedown", (e) => {
+  if (!menu.hidden && !(e.target as Element).closest(".menu-wrap")) setMenu(false);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !menu.hidden) setMenu(false);
+});
+// "New from template" opens its list in place, so a template is never one stray click away.
+const templateToggle = $<HTMLButtonElement>("template-toggle");
+const templateList = $("template-list");
+templateToggle.addEventListener("click", (e) => {
+  e.stopPropagation();
+  templateList.hidden = !templateList.hidden;
+  templateToggle.setAttribute("aria-expanded", String(!templateList.hidden));
+  templateToggle.classList.toggle("open", !templateList.hidden);
+});
+menuBtn.addEventListener("click", () => {
+  templateList.hidden = true;
+  templateToggle.classList.remove("open");
+  templateToggle.setAttribute("aria-expanded", "false");
+});
+for (const b of menu.querySelectorAll<HTMLButtonElement>("[data-template]")) {
+  b.addEventListener("click", () => newFromTemplate(b.dataset.template!));
+}
+$("save-as").hidden = !desktop;
+$("save-as").addEventListener("click", () => void saveProject(true));
+
+function newFromTemplate(name: string): void {
+  const make = TEMPLATES[name];
   if (!make) return;
   void (async () => {
     const branches = Object.keys(wbench.branches).length;
@@ -1735,7 +1780,7 @@ $<HTMLSelectElement>("template").addEventListener("change", (e) => {
     setWorkbench(newWorkbench(make()));
     toast("New engine created");
   })();
-});
+}
 
 $("open").addEventListener("click", () => {
   if (desktop) void openFromDisk();
@@ -1899,7 +1944,7 @@ $("copy").addEventListener("click", async () => {
 // An empty canvas says how to start.
 emptyHint = el("div", "canvas-empty");
 emptyHint.innerHTML = `<strong>Your canvas is empty</strong>
-  <p>Drag an <b>Engine</b> block from the drawer on the left, or pick a template under <b>New</b>.</p>
+  <p>Drag an <b>Engine</b> block from the drawer on the left, or pick a template under <b>New engine</b> in the <b>☰</b> menu.</p>
   <p>First time? The tutorial builds a working engine with you in about ten minutes.</p>`;
 const hintBtn = el("button", "btn primary", "Start the tutorial");
 hintBtn.type = "button";
@@ -1997,6 +2042,25 @@ tutorial = new Tutorial({
     showFile(path, start + Math.floor(count / 2));
   },
   runEngine: () => void dock.run(),
+  onBranch: () => wbench.current !== wbench.main,
+  branchesOpen: () => !!branchPanel?.isOpen,
+  testsOpen: () => !!testsPanel?.isOpen,
+  lastTestStatus: () => wbench.tests?.[wbench.tests.length - 1]?.status ?? null,
+  lastTestIsOfBranch: () => {
+    const t = wbench.tests?.[wbench.tests.length - 1];
+    // After Keep the branch is gone; the test still counts as the branch's.
+    return !!t && (t.newBranch.id === wbench.current || (t.decision === "kept" && wbench.current === wbench.main));
+  },
+  mainWorkspace: () => wbench.branches[wbench.main]?.workspace ?? null,
+  startFromRandomMover: async () => {
+    const branches = Object.keys(wbench.branches).length;
+    if ((bw.getAllBlocks(false).length || branches > 1) && !(await confirmAction("Start the tutorial from a new random mover? This replaces the current engine and its branches; save it first if you want to keep it."))) return false;
+    const ws = emptyWorkspace();
+    ws.search.kind = "random_mover";
+    forgetSavePath();
+    setWorkbench(newWorkbench(ws));
+    return true;
+  },
   engineRunning: () => dock.isRunning,
   engineAnswered: () => dock.hasAnswered,
   clearLines: () => {
@@ -2005,9 +2069,14 @@ tutorial = new Tutorial({
     showFile(activeFile);
   },
 });
+$("tutorial2-btn").addEventListener("click", () => {
+  if (tutorial!.courseId === "branches") tutorial!.stop();
+  else tutorial!.start("branches");
+  updateEmptyHint();
+});
 $("tutorial-btn").addEventListener("click", () => {
-  if (tutorial!.running) tutorial!.stop();
-  else tutorial!.start();
+  if (tutorial!.courseId === "first") tutorial!.stop();
+  else tutorial!.start("first");
   updateEmptyHint();
 });
 
@@ -2025,7 +2094,39 @@ branchPanel = new BranchPanel($<HTMLButtonElement>("branch-btn"), {
   },
   toast,
 });
-testsPanel = new TestsPanel($<HTMLButtonElement>("tests-btn"), {
+// Three views: building the engine, its tests, and playing it.
+type View = "engine" | "tests" | "play";
+const tabs: Record<View, HTMLButtonElement> = { engine: $<HTMLButtonElement>("engine-btn"), tests: $<HTMLButtonElement>("tests-btn"), play: $<HTMLButtonElement>("play-btn") };
+let view: View = "engine";
+function showView(v: View): void {
+  view = v;
+  if (v !== "tests") testsPanel?.close();
+  if (v !== "play") playView?.close();
+  for (const [k, b] of Object.entries(tabs) as [View, HTMLButtonElement][]) {
+    b.classList.toggle("active", k === v);
+    b.setAttribute("aria-selected", String(k === v));
+  }
+  document.querySelector<HTMLElement>("main.layout")!.hidden = v !== "engine";
+  if (v === "tests") testsPanel?.open();
+  if (v === "play") playView?.open();
+  if (v === "engine") Blockly.svgResize(bw);
+}
+tabs.engine.addEventListener("click", () => showView("engine"));
+tabs.tests.addEventListener("click", () => showView("tests"));
+tabs.play.addEventListener("click", () => showView("play"));
+/** A panel opened or closed itself (e.g. Keep from a test). */
+function markView(v: View, shown: boolean): void {
+  if (shown && view !== v) showView(v);
+  else if (!shown && view === v) showView("engine");
+}
+playView = new PlayView($("play-view"), {
+  workbench: () => wbench,
+  sync: syncBranch,
+  toast,
+  shown: (s) => markView("play", s),
+});
+testsPanel = new TestsPanel($("tests-view"), {
+  shown: (s) => markView("tests", s),
   workbench: () => wbench,
   sync: syncBranch,
   changed: () => {
@@ -2034,10 +2135,7 @@ testsPanel = new TestsPanel($<HTMLButtonElement>("tests-btn"), {
     branchPanel?.refresh();
   },
   toast,
-  keepBranch: (id) => {
-    testsPanel?.close();
-    branchPanel?.review(id);
-  },
+  keepBranch: (id) => branchPanel?.review(id),
   deleteBranch: (id) => void branchPanel?.askDelete(id),
 });
 showEngineTop();

@@ -30,6 +30,20 @@ export interface TutorialHost {
   engineRunning(): boolean;
   /** Desktop app: the engine has answered a `go` with a bestmove. */
   engineAnswered(): boolean;
+  /** The open branch is not the main version. */
+  onBranch(): boolean;
+  /** The Branches panel is open. */
+  branchesOpen(): boolean;
+  /** The Tests view is open. */
+  testsOpen(): boolean;
+  /** Status of the newest test ("running", "passed", ...), if any. */
+  lastTestStatus(): string | null;
+  /** The newest test was of the open branch. */
+  lastTestIsOfBranch(): boolean;
+  /** The main version (not a branch). */
+  mainWorkspace(): Workspace | null;
+  /** Starts over from a random mover (asks first when there is work). Returns false when cancelled. */
+  startFromRandomMover(): Promise<boolean>;
 }
 
 interface Step {
@@ -57,7 +71,7 @@ const WEB_RUN: Step[] = [
     body: (h) =>
       `${
         h.canLinkFolders()
-          ? `<p><b>With VS Code (recommended):</b> click <b>Link folder</b> at the top and pick an empty folder. The app writes the project there and keeps it in sync: open that folder in VS Code (<i>File &gt; Open Folder</i>), and changes you save there come back here as blocks.</p><p><b>Or:</b> click <b>Export Rust project</b> to download a zip, and unzip it.</p>`
+          ? `<p><b>With VS Code (recommended):</b> open the <b>☰</b> menu, click <b>Link folder</b> and pick an empty folder. The app writes the project there and keeps it in sync: open that folder in VS Code (<i>File &gt; Open Folder</i>), and changes you save there come back here as blocks.</p><p><b>Or:</b> click <b>Export Rust project</b> to download a zip, and unzip it.</p>`
           : `<p>Click <b>Export Rust project</b> to download a zip, and unzip it. (In Chrome or Edge you could also <b>Link folder</b> to keep a folder in sync for VS Code.)</p>`
       }`,
     done: (h) => h.folderLinked() || h.exported(),
@@ -214,11 +228,118 @@ const STEPS: Step[] = [
        <ul><li>Swap Random mover for <b>Negamax search</b> and plug in a <b>Hand-crafted evaluation</b> with <b>Material</b>: now it looks ahead and counts pieces.</li>
        <li>Add <b>Iterative deepening</b>, then <b>Alpha-beta pruning</b>, and watch the engine get stronger; right-click any block and choose <i>Explain this block</i>.</li>
        <li>After each change, ${isDesktop ? "click <b>↻ Rebuild</b>" : "build again (step 10)"} and let the new version play the old one.</li></ul>
-       <p>The <a href="guide.html#Home" target="_blank" rel="noopener">guide</a> shows how to change blocks, make your own and build on them. Stuck, or have an idea? Click <b>Feedback</b> at the top.</p>`,
+       <p>Next, the <b>branches and tests</b> tutorial (in the <b>☰</b> menu) turns this random mover into a real search, step by step, and proves it is stronger.</p>
+       <p>The <a href="guide.html#Home" target="_blank" rel="noopener">guide</a> shows how to change blocks, make your own and build on them. Stuck, or have an idea? Click <b>Feedback</b> in the <b>☰</b> menu.</p>`,
   },
 ];
 
-const KEY = "cfs.tutorial.step";
+const searchBlocks = (ws: Workspace | null) => (ws ? Object.values(ws.search.slots).flat().map((b) => b.type) : []);
+
+/** The second tutorial: from the random mover, a branch with Negamax and Material, tested and kept. */
+const BRANCH_STEPS: Step[] = [
+  {
+    title: "Branches and tests",
+    body: () =>
+      `<p>Your random mover works, but it plays random moves. In this tutorial you make a better version <b>next to it</b>, in a branch, prove with a test that it is stronger, and keep it.</p>
+       <p>That is how engine developers work: one idea at a time, each one tested.</p>
+       ${isDesktop ? "" : "<p>On the website you can do everything except run the test: that needs the desktop app. You can follow along and skip that step.</p>"}`,
+    action: { label: "Start from a random mover", run: (h) => void h.startFromRandomMover() },
+    done: (h) => !h.onBranch() && h.workspace()?.search.kind === "random_mover",
+  },
+  {
+    title: "1. Open Branches",
+    target: "#branch-btn",
+    body: () => `<p>Click <b>⑂ main</b> at the top. <i>main</i> is your engine as it is now. A branch is a copy you can change without touching it.</p>`,
+    done: (h) => h.branchesOpen() || h.onBranch(),
+  },
+  {
+    title: "2. Clone it",
+    target: ".br-new",
+    body: () => `<p>Type a name for the idea, for example <code>+ negamax</code>, and click <b>Clone "main"</b>.</p><p>You are now on the branch: the button at the top shows its name. <i>main</i> keeps the random mover.</p>`,
+    done: (h) => h.onBranch(),
+  },
+  {
+    title: "3. Search instead of guessing",
+    target: ".blocklyToolboxCategory",
+    body: () =>
+      `<p>Close the panel (<b>Esc</b>). On the canvas, drag the <b>Random mover</b> block to the bin.</p>
+       <p>Then open <b>Search</b> in the drawer and drag <b>Negamax search</b> into the empty search slot of the Engine block. Negamax looks a few moves ahead.</p>`,
+    done: (h) => h.onBranch() && h.workspace()?.search.kind === "negamax",
+  },
+  {
+    title: "4. Count the pieces",
+    body: () =>
+      `<p>Negamax needs to know who is better at the end of its search. Open <b>Evaluation</b> and drag <b>Hand-crafted evaluation</b> into the evaluation slot.</p>
+       <p>Then drag <b>Material</b> into it: now the engine counts pieces, so it takes free pieces and keeps its own.</p>`,
+    done: (h) => h.onBranch() && h.workspace()?.eval.kind === "hce" && !!h.workspace()?.eval.terms.some((t) => t.type === "material"),
+  },
+  {
+    title: "5. Mind the clock",
+    body: () =>
+      `<p>Tests play fast games with a clock. Drag <b>Iterative deepening</b> (under <b>Search</b>) into the search's first slot: it searches 1 move deep, then 2, then 3… and stops in time.</p>
+       <p>Without it the engine would search a fixed depth and lose games on time.</p>`,
+    done: (h) => h.onBranch() && searchBlocks(h.workspace()).includes("iterative_deepening"),
+  },
+  {
+    title: "6. What changed",
+    target: "#branch-btn",
+    body: () =>
+      `<p>Open <b>⑂</b> again. Your branch lists what it changed: <code>− Random mover</code>, <code>+ Negamax search</code>, <code>+ Hand-crafted evaluation</code>, <code>+ Material</code>, <code>+ Iterative deepening</code>.</p>
+       <p><b>Code changes</b> under it shows every line of Rust that changed, like a git diff.</p>`,
+    done: (h) => h.onBranch() && h.branchesOpen(),
+  },
+  {
+    title: "7. Open Tests",
+    target: "#tests-btn",
+    body: () => `<p>Close the panel and click <b>Tests</b> at the top. It is its own view; <b>Engine</b> takes you back to the blocks.</p>`,
+    done: (h) => h.testsOpen(),
+  },
+  {
+    title: "8. Start the test",
+    target: ".ts-start",
+    body: () =>
+      isDesktop
+        ? `<p>The test plays your branch (<b>New version</b>) against <i>main</i> (<b>Base version</b>). <i>What is tested</i> lists your changes.</p>
+           <p>Pick <b>VSTC</b>: very short games, made for big changes like this one. Then click <b>▶ Start test</b>. The first time, the app downloads fastchess and an opening book.</p>`
+        : `<p>In the desktop app you would pick <b>VSTC</b> and click <b>▶ Start test</b>: both versions are built and play each other. On the website, read the next step and click <b>Skip</b>.</p>`,
+    done: (h) => h.lastTestIsOfBranch() && h.lastTestStatus() !== null,
+  },
+  {
+    title: "9. Watch it",
+    body: () =>
+      `<p>Both versions are built, then the games start. Watch:</p>
+       <ul><li><b>Elo</b>: how much stronger your branch is, ± its margin.</li>
+       <li><b>The bar</b> and the <b>LLR</b> graph: the test passes at the right end.</li>
+       <li><b>Game pairs</b>: each opening is played twice, once with each color. Bars on the right are pairs your branch won.</li></ul>
+       <p>A random mover loses almost every game, so this test passes quickly.</p>`,
+    done: (h) => h.lastTestIsOfBranch() && h.lastTestStatus() === "passed",
+  },
+  {
+    title: "10. Keep it",
+    target: ".ts-keep",
+    body: () =>
+      `<p>It passed. Click <b>Keep</b>: you see every changed line, then <b>Keep it</b>. The branch becomes your main version.</p>
+       <p>A failed test would mean: delete the branch, or improve it and test again.</p>`,
+    done: (h) => !h.onBranch() && h.mainWorkspace()?.search.kind === "negamax",
+  },
+  {
+    title: "Done: tested and kept",
+    body: () =>
+      `<p>The <b>Timeline</b> in Tests now lists your test, and the chart shows the Elo your main version gained.</p>
+       <p>Keep going the same way, one idea per branch:</p>
+       <ul><li>Clone, add <b>Alpha-beta pruning</b>, test, keep.</li>
+       <li>Then <b>PSQT</b> in the evaluation, <b>MVV-LVA</b> move ordering, a <b>Transposition table</b>… right-click any block and pick <i>Explain this block</i>.</li></ul>
+       <p>Small changes need more games: use <b>STC</b> once the big gains are done. The guide page <a href="guide.html#Testing-Changes" target="_blank" rel="noopener">Testing your changes</a> explains every setting.</p>`,
+  },
+];
+
+export type CourseId = "first" | "branches";
+
+const COURSES: Record<CourseId, { steps: Step[]; key: string; label: string }> = {
+  first: { steps: STEPS, key: "cfs.tutorial.step", label: "Tutorial" },
+  branches: { steps: BRANCH_STEPS, key: "cfs.tutorial2.step", label: "Branches tutorial" },
+};
+
 const SEEN = "cfs.tutorial.seen";
 
 const store = {
@@ -241,10 +362,20 @@ const store = {
 
 export class Tutorial {
   private index = -1;
+  private course: CourseId = "first";
   private card: HTMLElement | null = null;
   private pointed: Element | null = null;
+  private timer: number | undefined;
 
   constructor(private readonly host: TutorialHost) {}
+
+  private get steps(): Step[] {
+    return COURSES[this.course].steps;
+  }
+
+  get courseId(): CourseId | null {
+    return this.index >= 0 ? this.course : null;
+  }
 
   get running(): boolean {
     return this.index >= 0;
@@ -252,21 +383,30 @@ export class Tutorial {
 
   /** Continues a tutorial left open before a reload, or offers it once to new visitors. */
   resumeOrOffer(): void {
-    const saved = Number(store.get(KEY));
-    if (store.get(KEY) !== null && saved >= 0 && saved < STEPS.length) return this.go(saved);
+    for (const [id, c] of Object.entries(COURSES) as [CourseId, (typeof COURSES)[CourseId]][]) {
+      const saved = Number(store.get(c.key));
+      if (store.get(c.key) !== null && saved >= 0 && saved < c.steps.length) {
+        this.course = id;
+        return this.go(saved);
+      }
+    }
     if (store.get(SEEN)) return;
     store.set(SEEN, "1");
     this.offer();
   }
 
-  start(): void {
+  start(course: CourseId = "first"): void {
     store.set(SEEN, "1");
+    if (this.index >= 0 && this.course !== course) store.set(COURSES[this.course].key, null);
+    this.course = course;
     this.go(0);
   }
 
   stop(): void {
     this.index = -1;
-    store.set(KEY, null);
+    window.clearInterval(this.timer);
+    this.timer = undefined;
+    store.set(COURSES[this.course].key, null);
     this.point(null);
     this.host.clearLines();
     this.card?.remove();
@@ -302,14 +442,16 @@ export class Tutorial {
 
   private go(index: number): void {
     this.index = index;
-    store.set(KEY, String(index));
+    store.set(COURSES[this.course].key, String(index));
     this.host.clearLines();
-    STEPS[index]!.enter?.(this.host);
+    this.steps[index]!.enter?.(this.host);
     this.render(true);
+    // Steps that wait on panels and tests check again now and then.
+    this.timer ??= window.setInterval(() => this.update(), 600);
   }
 
   private render(fresh: boolean): void {
-    const step = STEPS[this.index]!;
+    const step = this.steps[this.index]!;
     const done = step.done ? step.done(this.host) : true;
     if (!fresh && this.card?.dataset.step === String(this.index) && this.card.dataset.done === String(done)) {
       // Only the dynamic text (names) may have changed, or the element pointed at was redrawn.
@@ -322,8 +464,8 @@ export class Tutorial {
     const card = this.card && !this.card.classList.contains("tut-offer") ? this.card : this.frame();
     card.dataset.step = String(this.index);
     card.dataset.done = String(done);
-    const last = this.index === STEPS.length - 1;
-    card.innerHTML = `<div class="tut-head"><span>Tutorial · ${this.index + 1} of ${STEPS.length}</span><button type="button" class="tut-x" title="Close the tutorial" aria-label="Close the tutorial">×</button></div>
+    const last = this.index === this.steps.length - 1;
+    card.innerHTML = `<div class="tut-head"><span>${COURSES[this.course].label} · ${this.index + 1} of ${this.steps.length}</span><button type="button" class="tut-x" title="Close the tutorial" aria-label="Close the tutorial">×</button></div>
       <strong class="tut-title">${step.title}</strong>
       <div class="tut-body">${step.body(this.host)}</div>
       ${step.done ? `<p class="tut-state ${done ? "ok" : ""}">${done ? "✓ Done" : "Waiting for you…"}</p>` : ""}
@@ -341,6 +483,7 @@ export class Tutorial {
     card.querySelector('[data-act="action"]')?.addEventListener("click", () => {
       step.action!.run(this.host);
       this.render(false);
+      window.setTimeout(() => this.render(false), 300);
     });
     card.querySelectorAll<HTMLButtonElement>(".tut-copy").forEach((b) =>
       b.addEventListener("click", () => {
@@ -355,7 +498,7 @@ export class Tutorial {
   }
 
   private next(): void {
-    if (this.index >= STEPS.length - 1) return this.stop();
+    if (this.index >= this.steps.length - 1) return this.stop();
     this.go(this.index + 1);
   }
 

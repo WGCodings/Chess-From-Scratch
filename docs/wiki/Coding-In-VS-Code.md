@@ -4,7 +4,7 @@ You don't have to write code in the app. You can write it in VS Code (or any edi
 
 ## Link a folder (Chrome and Edge)
 
-1. Click **Link folder** at the top and pick an empty folder.
+1. Open the **☰** menu (top left), click **Link folder** and pick an empty folder.
 2. The app writes the whole project there. The top bar says *Linked to (your folder)*.
 3. In VS Code, use *File > Open Folder* and open that folder.
 
