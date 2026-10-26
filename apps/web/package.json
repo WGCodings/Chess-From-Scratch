@@ -14,7 +14,8 @@
     "pretypecheck": "npm run embed -w @cfs/codegen",
     "pretest": "npm run embed -w @cfs/codegen",
     "test": "vitest run",
-    "e2e": "npm run embed -w @cfs/codegen && node scripts/copy-blockly-media.mjs && tsx e2e/run.mts"
+    "e2e": "npm run embed -w @cfs/codegen && node scripts/copy-blockly-media.mjs && tsx e2e/run.mts",
+    "media": "npm run embed -w @cfs/codegen && node scripts/copy-blockly-media.mjs && tsx scripts/readme-media.mts"
   },
   "dependencies": {
     "@cfs/codegen": "^0.1.0",

@@ -2845,7 +2845,6 @@ details[open] > summary {
   border: 1px solid var(--line);
   border-radius: 8px;
   font: 13px/1.7 ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
-  columns: 1;
 }
 
 .pl-moves li::marker {
